@@ -9,6 +9,7 @@ from flask_cors import CORS
 import sys
 import warnings
 import datetime
+import requests
 warnings.filterwarnings('ignore')
 
 # Add project root directory to path
@@ -28,6 +29,9 @@ CORS(app)
 tokenizer = None
 model = None
 predictor = None
+
+# 计算模型目录的绝对路径
+MODEL_BASE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'model')
 
 # Available model configurations
 AVAILABLE_MODELS = {
@@ -59,7 +63,7 @@ AVAILABLE_MODELS = {
 
 def load_data_files():
     """Scan data directory and return available data files"""
-    data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
     data_files = []
     
     if os.path.exists(data_dir):
@@ -166,9 +170,9 @@ def save_prediction_results(file_path, prediction_type, prediction_results, actu
             # Calculate continuity analysis
             if len(prediction_results) > 0 and len(actual_data) > 0:
                 last_pred = prediction_results[0]  # First prediction point
-            first_actual = actual_data[0]      # First actual point
+                first_actual = actual_data[0]      # First actual point
                 
-            save_data['analysis']['continuity'] = {
+                save_data['analysis']['continuity'] = {
                     'last_prediction': {
                         'open': last_pred['open'],
                         'high': last_pred['high'],
@@ -335,8 +339,19 @@ def index():
 @app.route('/api/data-files')
 def get_data_files():
     """Get available data file list"""
-    data_files = load_data_files()
-    return jsonify(data_files)
+    try:
+        data_files = load_data_files()
+        return jsonify({
+            'code': 0,
+            'message': 'Success',
+            'data': data_files
+        })
+    except Exception as e:
+        return jsonify({
+            'code': 500,
+            'message': f'Failed to get data files: {str(e)}',
+            'data': None
+        })
 
 @app.route('/api/load-data', methods=['POST'])
 def load_data():
@@ -346,11 +361,19 @@ def load_data():
         file_path = data.get('file_path')
         
         if not file_path:
-            return jsonify({'error': 'File path cannot be empty'}), 400
+            return jsonify({
+                'code': 400,
+                'message': 'File path cannot be empty',
+                'data': None
+            }), 400
         
         df, error = load_data_file(file_path)
         if error:
-            return jsonify({'error': error}), 400
+            return jsonify({
+                'code': 400,
+                'message': error,
+                'data': None
+            }), 400
         
         # Detect data time frequency
         def detect_timeframe(df):
@@ -416,15 +439,27 @@ def predict():
         sample_count = int(data.get('sample_count', 1))
         
         if not file_path:
-            return jsonify({'error': 'File path cannot be empty'}), 400
+            return jsonify({
+                'code': 400,
+                'message': 'File path cannot be empty',
+                'data': None
+            })
         
         # Load data
         df, error = load_data_file(file_path)
         if error:
-            return jsonify({'error': error}), 400
+            return jsonify({
+                'code': 400,
+                'message': error,
+                'data': None
+            })
         
         if len(df) < lookback:
-            return jsonify({'error': f'Insufficient data length, need at least {lookback} rows'}), 400
+            return jsonify({
+                'code': 400,
+                'message': f'Insufficient data length, need at least {lookback} rows',
+                'data': None
+            })
         
         # Perform prediction
         if MODEL_AVAILABLE and predictor is not None:
@@ -623,21 +658,243 @@ def predict():
     except Exception as e:
         return jsonify({'error': f'Prediction failed: {str(e)}'}), 500
 
+@app.route('/api/predict2', methods=['POST'])
+def predict2():
+    """Perform prediction with direct K-line data input"""
+    try:
+        data = request.get_json()
+        kline_data = data.get('kline_data')
+        lookback = int(data.get('lookback', 400))
+        pred_len = int(data.get('pred_len', 120))
+        
+        # Get prediction quality parameters
+        temperature = float(data.get('temperature', 1.0))
+        top_p = float(data.get('top_p', 0.9))
+        sample_count = int(data.get('sample_count', 1))
+        
+        if not kline_data or len(kline_data) == 0:
+            return jsonify({
+                'code': 400,
+                'message': 'K-line data cannot be empty',
+                'data': data
+            }), 400
+        
+        # Convert K-line data to DataFrame
+        try:
+            df = pd.DataFrame(kline_data)
+            
+            # Check required columns
+            required_cols_base = ['open', 'high', 'low', 'close']
+            if not all(col in df.columns for col in required_cols_base):
+                return jsonify({
+                    'code': 400,
+                    'message': f'Missing required columns: {required_cols_base}',
+                    'data': None
+                }), 400
+            
+            # Process timestamp column
+            timestamp_processed = False
+            if 'timestamp' in df.columns:
+                df['timestamps'] = pd.to_datetime(df['timestamp'], unit='s', errors='coerce')
+                # Check if any valid timestamps were created
+                if not df['timestamps'].isna().all():
+                    timestamp_processed = True
+            
+            if not timestamp_processed and 'datetime' in df.columns:
+                df['timestamps'] = pd.to_datetime(df['datetime'], errors='coerce')
+                if not df['timestamps'].isna().all():
+                    timestamp_processed = True
+            
+            if not timestamp_processed and 'time' in df.columns:
+                df['timestamps'] = pd.to_datetime(df['time'], unit='s', errors='coerce')
+                if not df['timestamps'].isna().all():
+                    timestamp_processed = True
+            
+            if not timestamp_processed:
+                # If no valid timestamp column exists or all timestamps are invalid, create one with hourly intervals
+                df['timestamps'] = pd.date_range(start='2024-01-01', periods=len(df), freq='1H')
+            
+            # Ensure numeric columns are numeric type
+            for col in required_cols_base:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+            # Process volume column (optional)
+            if 'volume' in df.columns:
+                df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+            
+            # Process amount column (optional)
+            if 'amount' in df.columns:
+                df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
+            
+            # Remove rows containing NaN values from OHLC columns only
+            # Don't drop rows just because timestamp conversion failed
+            ohlc_cols = ['open', 'high', 'low', 'close']
+            if 'volume' in df.columns:
+                ohlc_cols.append('volume')
+            if 'amount' in df.columns:
+                ohlc_cols.append('amount')
+            
+            df = df.dropna(subset=ohlc_cols)
+            
+            # If all rows were dropped due to invalid OHLC data, return error
+            if len(df) == 0:
+                return jsonify({
+                    'code': 400,
+                    'message': 'All K-line data contains invalid OHLC values',
+                    'data': None
+                }), 400
+            
+        except Exception as e:
+            return jsonify({
+                'code': 400,
+                'message': f'Failed to process K-line data: {str(e)}',
+                'data': None
+            }), 400
+        
+        if len(df) < lookback:
+            return jsonify({
+                'code': 400,
+                'message': f'Insufficient data length, need at least {lookback} rows, got {len(df)} rows',
+                'data': None
+            }), 400
+        
+        # Perform prediction
+        if MODEL_AVAILABLE and predictor is not None:
+            try:
+                # Use real Kronos model
+                # Only use necessary columns: OHLCV, excluding amount
+                required_cols = ['open', 'high', 'low', 'close']
+                if 'volume' in df.columns:
+                    required_cols.append('volume')
+                
+                # Use the last lookback data points for prediction
+                x_df = df.iloc[-lookback:][required_cols]
+                x_timestamp = df.iloc[-lookback:]['timestamps']
+                
+                # Generate future timestamps for prediction
+                if len(df) > 1:
+                    time_diff = df['timestamps'].iloc[-1] - df['timestamps'].iloc[-2]
+                    last_timestamp = df['timestamps'].iloc[-1]
+                    y_timestamp = pd.date_range(
+                        start=last_timestamp + time_diff,
+                        periods=pred_len,
+                        freq=time_diff
+                    )
+                    y_timestamp = pd.Series(y_timestamp, name='timestamps')
+                else:
+                    # If only one data point, use default hourly intervals
+                    last_timestamp = df['timestamps'].iloc[-1]
+                    y_timestamp = pd.date_range(
+                        start=last_timestamp + pd.Timedelta(hours=1),
+                        periods=pred_len,
+                        freq='1H'
+                    )
+                    y_timestamp = pd.Series(y_timestamp, name='timestamps')
+                
+                # Ensure timestamps are Series format
+                if isinstance(x_timestamp, pd.DatetimeIndex):
+                    x_timestamp = pd.Series(x_timestamp, name='timestamps')
+                if isinstance(y_timestamp, pd.DatetimeIndex):
+                    y_timestamp = pd.Series(y_timestamp, name='timestamps')
+                
+                pred_df = predictor.predict(
+                    df=x_df,
+                    x_timestamp=x_timestamp,
+                    y_timestamp=y_timestamp,
+                    pred_len=pred_len,
+                    T=temperature,
+                    top_p=top_p,
+                    sample_count=sample_count
+                )
+                
+                prediction_type = f"Kronos model prediction (direct K-line input, {lookback} historical points)"
+                
+            except Exception as e:
+                return jsonify({'error': f'Kronos model prediction failed: {str(e)}'}), 500
+        else:
+            return jsonify({'error': 'Kronos model not loaded, please load model first'}), 400
+        
+        # Create chart using the input data
+        chart_json = create_prediction_chart(df, pred_df, lookback, pred_len, None, max(0, len(df) - lookback))
+        
+        # Prepare prediction result data
+        prediction_results = []
+        for i, (_, row) in enumerate(pred_df.iterrows()):
+            prediction_results.append({
+                'timestamp': y_timestamp.iloc[i].isoformat() if i < len(y_timestamp) else f"T{i}",
+                'open': float(row['open']),
+                'high': float(row['high']),
+                'low': float(row['low']),
+                'close': float(row['close']),
+                'volume': float(row['volume']) if 'volume' in row else 0,
+                'amount': float(row['amount']) if 'amount' in row else 0
+            })
+        
+        # Save prediction results to file (using a generic file path for direct data input)
+        # try:
+        #     save_prediction_results(
+        #         file_path="direct_kline_input",
+        #         prediction_type=prediction_type,
+        #         prediction_results=prediction_results,
+        #         actual_data=[],
+        #         input_data=x_df,
+        #         prediction_params={
+        #             'lookback': lookback,
+        #             'pred_len': pred_len,
+        #             'temperature': temperature,
+        #             'top_p': top_p,
+        #             'sample_count': sample_count,
+        #             'input_data_points': len(kline_data),
+        #             'data_source': 'direct_api_input'
+        #         }
+        #     )
+        # except Exception as e:
+        #     print(f"Failed to save prediction results: {e}")
+        
+        return jsonify({
+            'success': True,
+            'prediction_type': prediction_type,
+            'chart': chart_json,
+            'prediction_results': prediction_results,
+            'actual_data': [],
+            'has_comparison': False,
+            'input_data_info': {
+                'total_points': len(df),
+                'used_points': lookback,
+                'timeframe': 'auto-detected',
+                'price_range': {
+                    'min': float(df[['open', 'high', 'low', 'close']].min().min()),
+                    'max': float(df[['open', 'high', 'low', 'close']].max().max())
+                }
+            },
+            'message': f'Prediction completed using {lookback} K-line data points, generated {pred_len} prediction points'
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Prediction failed: {str(e)}'}), 500
+
 @app.route('/api/load-model', methods=['POST'])
 def load_model():
-    """Load Kronos model"""
     global tokenizer, model, predictor
     
     try:
-        if not MODEL_AVAILABLE:
-            return jsonify({'error': 'Kronos model library not available'}), 400
-        
         data = request.get_json()
-        model_key = data.get('model_key', 'kronos-small')
+        model_key = data.get('model', 'kronos-base')
         device = data.get('device', 'cpu')
         
+        if not MODEL_AVAILABLE:
+            return jsonify({
+                'code': 500,
+                'message': 'Model not available',
+                'data': None
+            })
+        
         if model_key not in AVAILABLE_MODELS:
-            return jsonify({'error': f'Unsupported model: {model_key}'}), 400
+            return jsonify({
+                'code': 400,
+                'message': f'Unsupported model: {model_key}',
+                'data': None
+            })
         
         model_config = AVAILABLE_MODELS[model_key]
         
@@ -649,53 +906,248 @@ def load_model():
         predictor = KronosPredictor(model, tokenizer, device=device, max_context=model_config['context_length'])
         
         return jsonify({
-            'success': True,
+            'code': 0,
             'message': f'Model loaded successfully: {model_config["name"]} ({model_config["params"]}) on {device}',
-            'model_info': {
-                'name': model_config['name'],
-                'params': model_config['params'],
-                'context_length': model_config['context_length'],
-                'description': model_config['description']
+            'data': {
+                'success': True,
+                'model_info': {
+                    'name': model_config['name'],
+                    'params': model_config['params'],
+                    'context_length': model_config['context_length'],
+                    'description': model_config['description']
+                }
             }
         })
         
     except Exception as e:
-        return jsonify({'error': f'Model loading failed: {str(e)}'}), 500
+        return jsonify({
+            'code': 500,
+            'message': f'Model loading failed: {str(e)}',
+            'data': None
+        })
 
 @app.route('/api/available-models')
 def get_available_models():
     """Get available model list"""
-    return jsonify({
-        'models': AVAILABLE_MODELS,
-        'model_available': MODEL_AVAILABLE
-    })
+    try:
+        return jsonify({
+            'code': 0,
+            'message': 'Success',
+            'data': {
+                'models': AVAILABLE_MODELS,
+                'model_available': MODEL_AVAILABLE
+            }
+        })
+    except Exception as e:
+        return jsonify({
+            'code': 500,
+            'message': f'Failed to get available models: {str(e)}',
+            'data': None
+        })
 
 @app.route('/api/model-status')
 def get_model_status():
-    """Get model status"""
-    if MODEL_AVAILABLE:
-        if predictor is not None:
-            return jsonify({
-                'available': True,
-                'loaded': True,
-                'message': 'Kronos model loaded and available',
-                'current_model': {
-                    'name': predictor.model.__class__.__name__,
-                    'device': str(next(predictor.model.parameters()).device)
+    """Get model loading status"""
+    try:
+        if MODEL_AVAILABLE:
+            status = {
+                'model_available': True,
+                'model_loaded': model is not None,
+                'tokenizer_loaded': tokenizer is not None,
+                'predictor_ready': predictor is not None
+            }
+            
+            if predictor is not None:
+                status['current_model'] = {
+                    'device': str(predictor.device),
+                    'max_context': predictor.max_context
                 }
-            })
+        else:
+            status = {
+                'model_available': False,
+                'model_loaded': False,
+                'tokenizer_loaded': False,
+                'predictor_ready': False
+            }
+        
+        return jsonify({
+            'code': 0,
+            'message': 'Success',
+            'data': status
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'code': 500,
+            'message': f'Failed to get model status: {str(e)}',
+            'data': None
+        })
+
+@app.route('/crypto.html')
+def crypto_page():
+    return render_template('crypto.html')
+
+@app.route('/api/exchange-kline', methods=['POST'])
+def get_exchange_kline():
+    """获取交易所K线数据"""
+    try:
+        data = request.get_json()
+        exchange = data.get('exchange', 'okx').lower()
+        symbol = data.get('symbol', 'BTC-USDT')
+        timeframe = data.get('timeframe', '1H')
+        limit = data.get('limit', 100)
+        
+        if exchange == 'okx':
+            # OKX API调用
+            url = 'https://www.okx.com/api/v5/market/candles'
+            params = {
+                'instId': symbol,
+                'bar': timeframe,
+                'limit': str(limit)
+            }
+            
+            response = requests.get(url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                result = response.json()
+                
+                if result.get('code') == '0' and result.get('data'):
+                    # 转换OKX数据格式为TradingView格式
+                    kline_data = []
+                    for item in result['data']:
+                        # OKX返回格式: [timestamp, open, high, low, close, volume, volCcy, volCcyQuote, confirm]
+                        timestamp_ms = int(item[0])  # OKX返回的是毫秒时间戳
+                        timestamp_sec = timestamp_ms // 1000  # 转换为秒级时间戳
+                        
+                        kline_data.append({
+                            'time': timestamp_sec,  # TradingView需要秒级时间戳
+                            'datetime': datetime.datetime.fromtimestamp(timestamp_sec).strftime('%Y-%m-%d %H:%M:%S'),  # 添加timestamp字段
+                            'open': float(item[1]),
+                            'high': float(item[2]),
+                            'low': float(item[3]),
+                            'close': float(item[4]),
+                            'volume': float(item[5]),
+                            'amount': float(item[6]) if len(item) > 6 else float(item[5]) * float(item[4])  # 成交额
+                        })
+                    
+                    # 按时间戳排序（从旧到新）- TradingView要求正序
+                    kline_data.sort(key=lambda x: x['time'])
+                    
+                    return jsonify({
+                        'code': 0,
+                        'message': 'K线数据获取成功',
+                        'data': {
+                            'success': True,
+                            'exchange': exchange.upper(),
+                            'symbol': symbol,
+                            'timeframe': timeframe,
+                            'count': len(kline_data),
+                            'kline_data': kline_data,
+                            'data_info': {
+                                'rows': len(kline_data),
+                                'columns': ['time', 'datetime', 'open', 'high', 'low', 'close', 'volume', 'amount'],
+                                'price_range': {
+                                    'min': min(item['low'] for item in kline_data) if kline_data else 0,
+                                    'max': max(item['high'] for item in kline_data) if kline_data else 0
+                                },
+                                'time_range': {
+                                    'start': datetime.datetime.fromtimestamp(kline_data[0]['time']).isoformat() if kline_data else None,
+                                    'end': datetime.datetime.fromtimestamp(kline_data[-1]['time']).isoformat() if kline_data else None
+                                }
+                            }
+                        }
+                    })
+                else:
+                    return jsonify({
+                        'code': 400,
+                        'message': f'OKX API返回错误: {result.get("msg", "未知错误")}',
+                        'data': None
+                    }), 400
+            else:
+                return jsonify({
+                    'code': 500,
+                    'message': f'请求失败，HTTP状态码: {response.status_code}',
+                    'data': None
+                }), 500
+        
+        elif exchange == 'binance':
+            # Binance API调用
+            url = 'https://api.binance.com/api/v3/klines'
+            params = {
+                'symbol': symbol.replace('-', ''),
+                'interval': timeframe.lower(),
+                'limit': limit
+            }
+            
+            response = requests.get(url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                result = response.json()
+                
+                # 转换Binance数据格式为TradingView格式
+                kline_data = []
+                for item in result:
+                    timestamp_ms = int(item[0])  # Binance返回的是毫秒时间戳
+                    timestamp_sec = timestamp_ms // 1000  # 转换为秒级时间戳
+                    
+                    kline_data.append({
+                        'time': timestamp_sec,  # TradingView需要秒级时间戳
+                        'timestamp': timestamp_sec,  # 添加timestamp字段
+                        'open': float(item[1]),
+                        'high': float(item[2]),
+                        'low': float(item[3]),
+                        'close': float(item[4]),
+                        'volume': float(item[5]),
+                        'amount': float(item[7])  # Binance的成交额在索引7
+                    })
+                
+                # 按时间戳排序（从旧到新）
+                kline_data.sort(key=lambda x: x['time'])
+                
+                return jsonify({
+                    'code': 0,
+                    'message': 'K线数据获取成功',
+                    'data': {
+                        'success': True,
+                        'exchange': exchange.upper(),
+                        'symbol': symbol,
+                        'timeframe': timeframe,
+                        'count': len(kline_data),
+                        'kline_data': kline_data,
+                        'data_info': {
+                            'rows': len(kline_data),
+                            'columns': ['time', 'timestamp', 'open', 'high', 'low', 'close', 'volume', 'amount'],
+                            'price_range': {
+                                'min': min(item['low'] for item in kline_data) if kline_data else 0,
+                                'max': max(item['high'] for item in kline_data) if kline_data else 0
+                            },
+                            'time_range': {
+                                'start': datetime.datetime.fromtimestamp(kline_data[0]['time']).isoformat() if kline_data else None,
+                                'end': datetime.datetime.fromtimestamp(kline_data[-1]['time']).isoformat() if kline_data else None
+                            }
+                        }
+                    }
+                })
+            else:
+                return jsonify({
+                    'code': 500,
+                    'message': f'Binance API请求失败，HTTP状态码: {response.status_code}',
+                    'data': None
+                }), 500
+        
         else:
             return jsonify({
-                'available': True,
-                'loaded': False,
-                'message': 'Kronos model available but not loaded'
-            })
-    else:
+                'code': 400,
+                'message': f'不支持的交易所: {exchange}',
+                'data': None
+            }), 400
+            
+    except Exception as e:
         return jsonify({
-            'available': False,
-            'loaded': False,
-            'message': 'Kronos model library not available, please install related dependencies'
-        })
+            'code': 500,
+            'message': f'获取K线数据失败: {str(e)}',
+            'data': None
+        }), 500
 
 if __name__ == '__main__':
     print("Starting Kronos Web UI...")

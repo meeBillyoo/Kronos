@@ -71,12 +71,25 @@ def main():
     try:
         from app import app
         print("✅ Web server started successfully!")
-        print(f"🌐 Access URL: http://localhost:7070")
+        print(f"🌐 Main page: http://localhost:7070")
+        print(f"🌐 加密货币页面: http://localhost:7070/crypto.html")
         print("💡 Tip: Press Ctrl+C to stop server")
         
-        # Auto-open browser
+        # Auto-open browser with option to choose page
+        print("\nWhich page would you like to open?")
+        print("1. Main page (index.html)")
+        print("2. 加密货币交易所页面 (crypto.html)")
+        print("3. Don't open browser")
+        
+        choice = input("Enter your choice (1-3, default: 1): ").strip()
+        
         time.sleep(2)
-        webbrowser.open('http://localhost:7070')
+        if choice == '2':
+            webbrowser.open('http://localhost:7070/crypto.html')
+        elif choice == '3':
+            pass  # Don't open browser
+        else:
+            webbrowser.open('http://localhost:7070')
         
         # Start Flask application
         app.run(debug=True, host='0.0.0.0', port=7070)

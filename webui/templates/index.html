@@ -668,17 +668,17 @@
         async function loadAvailableModels() {
             try {
                 const response = await axios.get('/api/available-models');
-                if (response.data.model_available) {
-                    availableModels = response.data.models;
+                if (response.data.code === 0) {
+                    availableModels = response.data.data.models;
                     populateModelSelect();
                     console.log('✅ Available models loaded successfully:', availableModels);
                 } else {
                     console.warn('⚠️ Kronos model library not available');
-                    showStatus('warning', 'Kronos model library not available, will use simulated prediction');
+                    showStatus('warning', response.data.message || 'Kronos model library not available');
                 }
             } catch (error) {
                 console.error('❌ Failed to load available models:', error);
-                showStatus('error', 'Failed to load available models');
+                showStatus('error', error.response?.data?.message || 'Failed to load available models');
             }
         }
 
@@ -710,22 +710,24 @@
                 document.getElementById('load-model-btn').disabled = true;
                 
                 const response = await axios.post('/api/load-model', {
-                    model_key: modelKey,
+                    model: modelKey,
                     device: device
                 });
                 
-                if (response.data.success) {
+                if (response.data.code === 0) {
                     modelLoaded = true;
                     showStatus('success', response.data.message);
                     updateModelStatus();
-                    document.getElementById('predict-btn').disabled = false;
-                    console.log('✅ Model loaded successfully:', response.data.model_info);
+                    if (currentDataFile) {
+                        document.getElementById('predict-btn').disabled = false;
+                    }
+                    console.log('✅ Model loaded successfully:', response.data.data.model_info);
                 } else {
-                    showStatus('error', response.data.error);
+                    showStatus('error', response.data.message);
                 }
             } catch (error) {
                 console.error('❌ Model loading failed:', error);
-                showStatus('error', `Model loading failed: ${error.response?.data?.error || error.message}`);
+                showStatus('error', error.response?.data?.message || `Model loading failed: ${error.message}`);
             } finally {
                 showLoading(false);
                 document.getElementById('load-model-btn').disabled = false;
@@ -736,17 +738,23 @@
         async function updateModelStatus() {
             try {
                 const response = await axios.get('/api/model-status');
-                const status = response.data;
-                
-                if (status.loaded) {
-                    showStatus('success', `Model loaded: ${status.current_model.name} on ${status.current_model.device}`);
-                } else if (status.available) {
-                    showStatus('info', 'Model available but not loaded');
+                if (response.data.code === 0) {
+                    const status = response.data.data;
+                    
+                    if (status.model_loaded && status.predictor_ready) {
+                        const modelInfo = status.current_model;
+                        showStatus('success', `Model ready: ${modelInfo.device} device, max context: ${modelInfo.max_context}`);
+                    } else if (status.model_available) {
+                        showStatus('info', 'Model available but not loaded');
+                    } else {
+                        showStatus('warning', 'Model library not available');
+                    }
                 } else {
-                    showStatus('warning', 'Model library not available');
+                    showStatus('error', response.data.message);
                 }
             } catch (error) {
                 console.error('❌ Failed to get model status:', error);
+                showStatus('error', error.response?.data?.message || 'Failed to get model status');
             }
         }
 
@@ -754,22 +762,26 @@
         async function loadDataFiles() {
             try {
                 const response = await axios.get('/api/data-files');
-                const dataFiles = response.data;
-                
-                const dataFileSelect = document.getElementById('data-file-select');
-                dataFileSelect.innerHTML = '<option value="">Please select data file</option>';
-                
-                dataFiles.forEach(file => {
-                    const option = document.createElement('option');
-                    option.value = file.path;
-                    option.textContent = `${file.name} (${file.size})`;
-                    dataFileSelect.appendChild(option);
-                });
-                
-                console.log('✅ Data file list loaded successfully:', dataFiles);
+                if (response.data.code === 0) {
+                    const dataFiles = response.data.data;
+                    
+                    const dataFileSelect = document.getElementById('data-file-select');
+                    dataFileSelect.innerHTML = '<option value="">Please select data file</option>';
+                    
+                    dataFiles.forEach(file => {
+                        const option = document.createElement('option');
+                        option.value = file.path;
+                        option.textContent = `${file.name} (${file.size})`;
+                        dataFileSelect.appendChild(option);
+                    });
+                    
+                    console.log('✅ Data file list loaded successfully:', dataFiles);
+                } else {
+                    showStatus('error', response.data.message);
+                }
             } catch (error) {
                 console.error('❌ Failed to load data file list:', error);
-                showStatus('error', 'Failed to load data file list');
+                showStatus('error', error.response?.data?.message || 'Failed to load data file list');
             }
         }
 
@@ -790,24 +802,31 @@
                     file_path: filePath
                 });
                 
-                if (response.data.success) {
+                // 注意：根据API文档，/api/load-data 可能还使用旧格式，需要兼容处理
+                if (response.data.success || response.data.code === 0) {
                     currentDataFile = filePath;
-                    currentDataInfo = response.data.data_info;
-                    showDataInfo(response.data.data_info);
-                    showStatus('success', response.data.message);
+                    // 兼容新旧格式
+                    const dataInfo = response.data.data_info || response.data.data?.data_info;
+                    const message = response.data.message || response.data.data?.message;
+                    
+                    currentDataInfo = dataInfo;
+                    showDataInfo(dataInfo);
+                    showStatus('success', message);
                     
                     // Update prediction button status
                     if (modelLoaded) {
                         document.getElementById('predict-btn').disabled = false;
                     }
                     
-                    console.log('✅ Data loaded successfully:', response.data.data_info);
+                    console.log('✅ Data loaded successfully:', dataInfo);
                 } else {
-                    showStatus('error', response.data.error);
+                    const errorMsg = response.data.message || response.data.error;
+                    showStatus('error', errorMsg);
                 }
             } catch (error) {
                 console.error('❌ Data loading failed:', error);
-                showStatus('error', `Data loading failed: ${error.response?.data?.error || error.message}`);
+                const errorMsg = error.response?.data?.message || error.response?.data?.error || error.message;
+                showStatus('error', `Data loading failed: ${errorMsg}`);
             } finally {
                 showLoading(false);
                 document.getElementById('load-data-btn').disabled = false;
@@ -1080,16 +1099,23 @@
                 
                 const response = await axios.post('/api/predict', predictionParams);
                 
-                if (response.data.success) {
+                // 注意：根据API文档，/api/predict 可能还使用旧格式，需要兼容处理
+                if (response.data.success || response.data.code === 0) {
+                    // 兼容新旧格式
+                    const resultData = response.data.data || response.data;
+                    const message = response.data.message || resultData.message;
+                    
                     // Display prediction results
-                    displayPredictionResult(response.data);
-                    showStatus('success', response.data.message);
+                    displayPredictionResult(resultData);
+                    showStatus('success', message);
                 } else {
-                    showStatus('error', response.data.error);
+                    const errorMsg = response.data.message || response.data.error;
+                    showStatus('error', errorMsg);
                 }
             } catch (error) {
                 console.error('❌ Prediction failed:', error);
-                showStatus('error', `Prediction failed: ${error.response?.data?.error || error.message}`);
+                const errorMsg = error.response?.data?.message || error.response?.data?.error || error.message;
+                showStatus('error', `Prediction failed: ${errorMsg}`);
             } finally {
                 showLoading(false);
                 document.getElementById('predict-btn').disabled = false;
