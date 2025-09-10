@@ -15,342 +15,23 @@ warnings.filterwarnings('ignore')
 # Add project root directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-try:
-    from model import Kronos, KronosTokenizer, KronosPredictor
-    MODEL_AVAILABLE = True
-except ImportError:
-    MODEL_AVAILABLE = False
-    print("Warning: Kronos model cannot be imported, will use simulated data for demonstration")
+# 导入模型管理模块
+import app_model
+import app_predict
+import app_crypto_kline
 
 app = Flask(__name__)
 CORS(app)
 
-# Global variables to store models
-tokenizer = None
-model = None
-predictor = None
-
-# 计算模型目录的绝对路径
-MODEL_BASE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'model')
-
-# Available model configurations
-AVAILABLE_MODELS = {
-    'kronos-mini': {
-        'name': 'Kronos-mini',
-        'model_id': 'NeoQuasar/Kronos-mini',
-        'tokenizer_id': 'NeoQuasar/Kronos-Tokenizer-2k',
-        'context_length': 2048,
-        'params': '4.1M',
-        'description': 'Lightweight model, suitable for fast prediction'
-    },
-    'kronos-small': {
-        'name': 'Kronos-small',
-        'model_id': 'NeoQuasar/Kronos-small',
-        'tokenizer_id': 'NeoQuasar/Kronos-Tokenizer-base',
-        'context_length': 512,
-        'params': '24.7M',
-        'description': 'Small model, balanced performance and speed'
-    },
-    'kronos-base': {
-        'name': 'Kronos-base',
-        'model_id': 'NeoQuasar/Kronos-base',
-        'tokenizer_id': 'NeoQuasar/Kronos-Tokenizer-base',
-        'context_length': 512,
-        'params': '102.3M',
-        'description': 'Base model, provides better prediction quality'
-    }
-}
-
-def load_data_files():
-    """Scan data directory and return available data files"""
-    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
-    data_files = []
-    
-    if os.path.exists(data_dir):
-        for file in os.listdir(data_dir):
-            if file.endswith(('.csv', '.feather')):
-                file_path = os.path.join(data_dir, file)
-                file_size = os.path.getsize(file_path)
-                data_files.append({
-                    'name': file,
-                    'path': file_path,
-                    'size': f"{file_size / 1024:.1f} KB" if file_size < 1024*1024 else f"{file_size / (1024*1024):.1f} MB"
-                })
-    
-    return data_files
-
-def load_data_file(file_path):
-    """Load data file"""
-    try:
-        if file_path.endswith('.csv'):
-            df = pd.read_csv(file_path)
-        elif file_path.endswith('.feather'):
-            df = pd.read_feather(file_path)
-        else:
-            return None, "Unsupported file format"
-        
-        # Check required columns
-        required_cols = ['open', 'high', 'low', 'close']
-        if not all(col in df.columns for col in required_cols):
-            return None, f"Missing required columns: {required_cols}"
-        
-        # Process timestamp column
-        if 'timestamps' in df.columns:
-            df['timestamps'] = pd.to_datetime(df['timestamps'])
-        elif 'timestamp' in df.columns:
-            df['timestamps'] = pd.to_datetime(df['timestamp'])
-        elif 'date' in df.columns:
-            # If column name is 'date', rename it to 'timestamps'
-            df['timestamps'] = pd.to_datetime(df['date'])
-        else:
-            # If no timestamp column exists, create one
-            df['timestamps'] = pd.date_range(start='2024-01-01', periods=len(df), freq='1H')
-        
-        # Ensure numeric columns are numeric type
-        for col in ['open', 'high', 'low', 'close']:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        # Process volume column (optional)
-        if 'volume' in df.columns:
-            df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
-        
-        # Process amount column (optional, but not used for prediction)
-        if 'amount' in df.columns:
-            df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
-        
-        # Remove rows containing NaN values
-        df = df.dropna()
-        
-        return df, None
-        
-    except Exception as e:
-        return None, f"Failed to load file: {str(e)}"
-
-def save_prediction_results(file_path, prediction_type, prediction_results, actual_data, input_data, prediction_params):
-    """Save prediction results to file"""
-    try:
-        # Create prediction results directory
-        results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prediction_results')
-        os.makedirs(results_dir, exist_ok=True)
-        
-        # Generate filename
-        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f'prediction_{timestamp}.json'
-        filepath = os.path.join(results_dir, filename)
-        
-        # Prepare data for saving
-        save_data = {
-            'timestamp': datetime.datetime.now().isoformat(),
-            'file_path': file_path,
-            'prediction_type': prediction_type,
-            'prediction_params': prediction_params,
-            'input_data_summary': {
-                'rows': len(input_data),
-                'columns': list(input_data.columns),
-                'price_range': {
-                    'open': {'min': float(input_data['open'].min()), 'max': float(input_data['open'].max())},
-                    'high': {'min': float(input_data['high'].min()), 'max': float(input_data['high'].max())},
-                    'low': {'min': float(input_data['low'].min()), 'max': float(input_data['low'].max())},
-                    'close': {'min': float(input_data['close'].min()), 'max': float(input_data['close'].max())}
-                },
-                'last_values': {
-                    'open': float(input_data['open'].iloc[-1]),
-                    'high': float(input_data['high'].iloc[-1]),
-                    'low': float(input_data['low'].iloc[-1]),
-                    'close': float(input_data['close'].iloc[-1])
-                }
-            },
-            'prediction_results': prediction_results,
-            'actual_data': actual_data,
-            'analysis': {}
-        }
-        
-        # If actual data exists, perform comparison analysis
-        if actual_data and len(actual_data) > 0:
-            # Calculate continuity analysis
-            if len(prediction_results) > 0 and len(actual_data) > 0:
-                last_pred = prediction_results[0]  # First prediction point
-                first_actual = actual_data[0]      # First actual point
-                
-                save_data['analysis']['continuity'] = {
-                    'last_prediction': {
-                        'open': last_pred['open'],
-                        'high': last_pred['high'],
-                        'low': last_pred['low'],
-                        'close': last_pred['close']
-                    },
-                    'first_actual': {
-                        'open': first_actual['open'],
-                        'high': first_actual['high'],
-                        'low': first_actual['low'],
-                        'close': first_actual['close']
-                    },
-                    'gaps': {
-                        'open_gap': abs(last_pred['open'] - first_actual['open']),
-                        'high_gap': abs(last_pred['high'] - first_actual['high']),
-                        'low_gap': abs(last_pred['low'] - first_actual['low']),
-                        'close_gap': abs(last_pred['close'] - first_actual['close'])
-                    },
-                    'gap_percentages': {
-                        'open_gap_pct': (abs(last_pred['open'] - first_actual['open']) / first_actual['open']) * 100,
-                        'high_gap_pct': (abs(last_pred['high'] - first_actual['high']) / first_actual['high']) * 100,
-                        'low_gap_pct': (abs(last_pred['low'] - first_actual['low']) / first_actual['low']) * 100,
-                        'close_gap_pct': (abs(last_pred['close'] - first_actual['close']) / first_actual['close']) * 100
-                    }
-                }
-        
-        # Save to file
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(save_data, f, indent=2, ensure_ascii=False)
-        
-        print(f"Prediction results saved to: {filepath}")
-        return filepath
-        
-    except Exception as e:
-        print(f"Failed to save prediction results: {e}")
-        return None
-
-def create_prediction_chart(df, pred_df, lookback, pred_len, actual_df=None, historical_start_idx=0):
-    """Create prediction chart"""
-    # Use specified historical data start position, not always from the beginning of df
-    if historical_start_idx + lookback + pred_len <= len(df):
-        # Display lookback historical points + pred_len prediction points starting from specified position
-        historical_df = df.iloc[historical_start_idx:historical_start_idx+lookback]
-        prediction_range = range(historical_start_idx+lookback, historical_start_idx+lookback+pred_len)
-    else:
-        # If data is insufficient, adjust to maximum available range
-        available_lookback = min(lookback, len(df) - historical_start_idx)
-        available_pred_len = min(pred_len, max(0, len(df) - historical_start_idx - available_lookback))
-        historical_df = df.iloc[historical_start_idx:historical_start_idx+available_lookback]
-        prediction_range = range(historical_start_idx+available_lookback, historical_start_idx+available_lookback+available_pred_len)
-    
-    # Create chart
-    fig = go.Figure()
-    
-    # Add historical data (candlestick chart)
-    fig.add_trace(go.Candlestick(
-        x=historical_df['timestamps'] if 'timestamps' in historical_df.columns else historical_df.index,
-        open=historical_df['open'],
-        high=historical_df['high'],
-        low=historical_df['low'],
-        close=historical_df['close'],
-        name='Historical Data (400 data points)',
-        increasing_line_color='#26A69A',
-        decreasing_line_color='#EF5350'
-    ))
-    
-    # Add prediction data (candlestick chart)
-    if pred_df is not None and len(pred_df) > 0:
-        # Calculate prediction data timestamps - ensure continuity with historical data
-        if 'timestamps' in df.columns and len(historical_df) > 0:
-            # Start from the last timestamp of historical data, create prediction timestamps with the same time interval
-            last_timestamp = historical_df['timestamps'].iloc[-1]
-            time_diff = df['timestamps'].iloc[1] - df['timestamps'].iloc[0] if len(df) > 1 else pd.Timedelta(hours=1)
-            
-            pred_timestamps = pd.date_range(
-                start=last_timestamp + time_diff,
-                periods=len(pred_df),
-                freq=time_diff
-            )
-        else:
-            # If no timestamps, use index
-            pred_timestamps = range(len(historical_df), len(historical_df) + len(pred_df))
-        
-        fig.add_trace(go.Candlestick(
-            x=pred_timestamps,
-            open=pred_df['open'],
-            high=pred_df['high'],
-            low=pred_df['low'],
-            close=pred_df['close'],
-            name='Prediction Data (120 data points)',
-            increasing_line_color='#66BB6A',
-            decreasing_line_color='#FF7043'
-        ))
-    
-    # Add actual data for comparison (if exists)
-    if actual_df is not None and len(actual_df) > 0:
-        # Actual data should be in the same time period as prediction data
-        if 'timestamps' in df.columns:
-            # Actual data should use the same timestamps as prediction data to ensure time alignment
-            if 'pred_timestamps' in locals():
-                actual_timestamps = pred_timestamps
-            else:
-                # If no prediction timestamps, calculate from the last timestamp of historical data
-                if len(historical_df) > 0:
-                    last_timestamp = historical_df['timestamps'].iloc[-1]
-                    time_diff = df['timestamps'].iloc[1] - df['timestamps'].iloc[0] if len(df) > 1 else pd.Timedelta(hours=1)
-                    actual_timestamps = pd.date_range(
-                        start=last_timestamp + time_diff,
-                        periods=len(actual_df),
-                        freq=time_diff
-                    )
-                else:
-                    actual_timestamps = range(len(historical_df), len(historical_df) + len(actual_df))
-        else:
-            actual_timestamps = range(len(historical_df), len(historical_df) + len(actual_df))
-        
-        fig.add_trace(go.Candlestick(
-            x=actual_timestamps,
-            open=actual_df['open'],
-            high=actual_df['high'],
-            low=actual_df['low'],
-            close=actual_df['close'],
-            name='Actual Data (120 data points)',
-            increasing_line_color='#FF9800',
-            decreasing_line_color='#F44336'
-        ))
-    
-    # Update layout
-    fig.update_layout(
-        title='Kronos Financial Prediction Results - 400 Historical Points + 120 Prediction Points vs 120 Actual Points',
-        xaxis_title='Time',
-        yaxis_title='Price',
-        template='plotly_white',
-        height=600,
-        showlegend=True
-    )
-    
-    # Ensure x-axis time continuity
-    if 'timestamps' in historical_df.columns:
-        # Get all timestamps and sort them
-        all_timestamps = []
-        if len(historical_df) > 0:
-            all_timestamps.extend(historical_df['timestamps'])
-        if 'pred_timestamps' in locals():
-            all_timestamps.extend(pred_timestamps)
-        if 'actual_timestamps' in locals():
-            all_timestamps.extend(actual_timestamps)
-        
-        if all_timestamps:
-            all_timestamps = sorted(all_timestamps)
-            fig.update_xaxes(
-                range=[all_timestamps[0], all_timestamps[-1]],
-                rangeslider_visible=False,
-                type='date'
-            )
-    
-    return json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
-
-@app.route('/')
-def index():
-    """Home page"""
-    return render_template('index.html')
-
 @app.route('/api/data-files')
 def get_data_files():
     """Get available data file list"""
-    try:
-        data_files = load_data_files()
-        return jsonify({
+    # 调用app_model.py中的函数
+    data_files = app_model.load_data_files()
+    return jsonify({
             'code': 0,
             'message': 'Success',
             'data': data_files
-        })
-    except Exception as e:
-        return jsonify({
-            'code': 500,
-            'message': f'Failed to get data files: {str(e)}',
-            'data': None
         })
 
 @app.route('/api/load-data', methods=['POST'])
@@ -361,58 +42,27 @@ def load_data():
         file_path = data.get('file_path')
         
         if not file_path:
-            return jsonify({
-                'code': 400,
-                'message': 'File path cannot be empty',
-                'data': None
-            }), 400
+            return jsonify({'error': 'file_path is required'}), 400
         
-        df, error = load_data_file(file_path)
+        # 调用app_model.py中的函数
+        df, error = app_model.load_data_file(file_path)
+        
         if error:
-            return jsonify({
-                'code': 400,
-                'message': error,
-                'data': None
-            }), 400
+            return jsonify({'error': f'Failed to load data: {error}'}), 500
         
-        # Detect data time frequency
-        def detect_timeframe(df):
-            if len(df) < 2:
-                return "Unknown"
-            
-            time_diffs = []
-            for i in range(1, min(10, len(df))):  # Check first 10 time differences
-                diff = df['timestamps'].iloc[i] - df['timestamps'].iloc[i-1]
-                time_diffs.append(diff)
-            
-            if not time_diffs:
-                return "Unknown"
-            
-            # Calculate average time difference
-            avg_diff = sum(time_diffs, pd.Timedelta(0)) / len(time_diffs)
-            
-            # Convert to readable format
-            if avg_diff < pd.Timedelta(minutes=1):
-                return f"{avg_diff.total_seconds():.0f} seconds"
-            elif avg_diff < pd.Timedelta(hours=1):
-                return f"{avg_diff.total_seconds() / 60:.0f} minutes"
-            elif avg_diff < pd.Timedelta(days=1):
-                return f"{avg_diff.total_seconds() / 3600:.0f} hours"
-            else:
-                return f"{avg_diff.days} days"
-        
-        # Return data information
+        # 构建完整的数据信息，包含前端需要的所有字段
         data_info = {
             'rows': len(df),
             'columns': list(df.columns),
-            'start_date': df['timestamps'].min().isoformat() if 'timestamps' in df.columns else 'N/A',
-            'end_date': df['timestamps'].max().isoformat() if 'timestamps' in df.columns else 'N/A',
+            'dtypes': {col: str(dtype) for col, dtype in df.dtypes.items()},
+            'start_date': df['timestamps'].min().isoformat() if 'timestamps' in df.columns else None,
+            'end_date': df['timestamps'].max().isoformat() if 'timestamps' in df.columns else None,
+            'timeframe': 'auto-detected',  # 可以根据时间间隔计算
             'price_range': {
-                'min': float(df[['open', 'high', 'low', 'close']].min().min()),
-                'max': float(df[['open', 'high', 'low', 'close']].max().max())
+                'min': float(df['close'].min()),
+                'max': float(df['close'].max())
             },
-            'prediction_columns': ['open', 'high', 'low', 'close'] + (['volume'] if 'volume' in df.columns else []),
-            'timeframe': detect_timeframe(df)
+            'prediction_columns': ['open', 'high', 'low', 'close']  # 预测用的列
         }
         
         return jsonify({
@@ -437,229 +87,14 @@ def predict():
         temperature = float(data.get('temperature', 1.0))
         top_p = float(data.get('top_p', 0.9))
         sample_count = int(data.get('sample_count', 1))
-        
-        if not file_path:
-            return jsonify({
-                'code': 400,
-                'message': 'File path cannot be empty',
-                'data': None
-            })
-        
-        # Load data
-        df, error = load_data_file(file_path)
-        if error:
-            return jsonify({
-                'code': 400,
-                'message': error,
-                'data': None
-            })
-        
-        if len(df) < lookback:
-            return jsonify({
-                'code': 400,
-                'message': f'Insufficient data length, need at least {lookback} rows',
-                'data': None
-            })
-        
-        # Perform prediction
-        if MODEL_AVAILABLE and predictor is not None:
-            try:
-                # Use real Kronos model
-                # Only use necessary columns: OHLCV, excluding amount
-                required_cols = ['open', 'high', 'low', 'close']
-                if 'volume' in df.columns:
-                    required_cols.append('volume')
-                
-                # Process time period selection
-                start_date = data.get('start_date')
-                
-                if start_date:
-                    # Custom time period - fix logic: use data within selected window
-                    start_dt = pd.to_datetime(start_date)
-                    
-                    # Find data after start time
-                    mask = df['timestamps'] >= start_dt
-                    time_range_df = df[mask]
-                    
-                    # Ensure sufficient data: lookback + pred_len
-                    if len(time_range_df) < lookback + pred_len:
-                        return jsonify({'error': f'Insufficient data from start time {start_dt.strftime("%Y-%m-%d %H:%M")}, need at least {lookback + pred_len} data points, currently only {len(time_range_df)} available'}), 400
-                    
-                    # Use first lookback data points within selected window for prediction
-                    x_df = time_range_df.iloc[:lookback][required_cols]
-                    x_timestamp = time_range_df.iloc[:lookback]['timestamps']
-                    
-                    # Use last pred_len data points within selected window as actual values
-                    y_timestamp = time_range_df.iloc[lookback:lookback+pred_len]['timestamps']
-                    
-                    # Calculate actual time period length
-                    start_timestamp = time_range_df['timestamps'].iloc[0]
-                    end_timestamp = time_range_df['timestamps'].iloc[lookback+pred_len-1]
-                    time_span = end_timestamp - start_timestamp
-                    
-                    prediction_type = f"Kronos model prediction (within selected window: first {lookback} data points for prediction, last {pred_len} data points for comparison, time span: {time_span})"
-                else:
-                    # Use latest data
-                    x_df = df.iloc[:lookback][required_cols]
-                    x_timestamp = df.iloc[:lookback]['timestamps']
-                    y_timestamp = df.iloc[lookback:lookback+pred_len]['timestamps']
-                    prediction_type = "Kronos model prediction (latest data)"
-                
-                # Ensure timestamps are Series format, not DatetimeIndex, to avoid .dt attribute error in Kronos model
-                if isinstance(x_timestamp, pd.DatetimeIndex):
-                    x_timestamp = pd.Series(x_timestamp, name='timestamps')
-                if isinstance(y_timestamp, pd.DatetimeIndex):
-                    y_timestamp = pd.Series(y_timestamp, name='timestamps')
-                
-                pred_df = predictor.predict(
-                    df=x_df,
-                    x_timestamp=x_timestamp,
-                    y_timestamp=y_timestamp,
-                    pred_len=pred_len,
-                    T=temperature,
-                    top_p=top_p,
-                    sample_count=sample_count
-                )
-                
-            except Exception as e:
-                return jsonify({'error': f'Kronos model prediction failed: {str(e)}'}), 500
-        else:
-            return jsonify({'error': 'Kronos model not loaded, please load model first'}), 400
-        
-        # Prepare actual data for comparison (if exists)
-        actual_data = []
-        actual_df = None
-        
-        if start_date:  # Custom time period
-            # Fix logic: use data within selected window
-            # Prediction uses first 400 data points within selected window
-            # Actual data should be last 120 data points within selected window
-            start_dt = pd.to_datetime(start_date)
-            
-            # Find data starting from start_date
-            mask = df['timestamps'] >= start_dt
-            time_range_df = df[mask]
-            
-            if len(time_range_df) >= lookback + pred_len:
-                # Get last 120 data points within selected window as actual values
-                actual_df = time_range_df.iloc[lookback:lookback+pred_len]
-                
-                for i, (_, row) in enumerate(actual_df.iterrows()):
-                    actual_data.append({
-                        'timestamp': row['timestamps'].isoformat(),
-                        'open': float(row['open']),
-                        'high': float(row['high']),
-                        'low': float(row['low']),
-                        'close': float(row['close']),
-                        'volume': float(row['volume']) if 'volume' in row else 0,
-                        'amount': float(row['amount']) if 'amount' in row else 0
-                    })
-        else:  # Latest data
-            # Prediction uses first 400 data points
-            # Actual data should be 120 data points after first 400 data points
-            if len(df) >= lookback + pred_len:
-                actual_df = df.iloc[lookback:lookback+pred_len]
-                for i, (_, row) in enumerate(actual_df.iterrows()):
-                    actual_data.append({
-                        'timestamp': row['timestamps'].isoformat(),
-                        'open': float(row['open']),
-                        'high': float(row['high']),
-                        'low': float(row['low']),
-                        'close': float(row['close']),
-                        'volume': float(row['volume']) if 'volume' in row else 0,
-                        'amount': float(row['amount']) if 'amount' in row else 0
-                    })
-        
-        # Create chart - pass historical data start position
-        if start_date:
-            # Custom time period: find starting position of historical data in original df
-            start_dt = pd.to_datetime(start_date)
-            mask = df['timestamps'] >= start_dt
-            historical_start_idx = df[mask].index[0] if len(df[mask]) > 0 else 0
-        else:
-            # Latest data: start from beginning
-            historical_start_idx = 0
-        
-        chart_json = create_prediction_chart(df, pred_df, lookback, pred_len, actual_df, historical_start_idx)
-        
-        # Prepare prediction result data - fix timestamp calculation logic
-        if 'timestamps' in df.columns:
-            if start_date:
-                # Custom time period: use selected window data to calculate timestamps
-                start_dt = pd.to_datetime(start_date)
-                mask = df['timestamps'] >= start_dt
-                time_range_df = df[mask]
-                
-                if len(time_range_df) >= lookback:
-                    # Calculate prediction timestamps starting from last time point of selected window
-                    last_timestamp = time_range_df['timestamps'].iloc[lookback-1]
-                    time_diff = df['timestamps'].iloc[1] - df['timestamps'].iloc[0]
-                    future_timestamps = pd.date_range(
-                        start=last_timestamp + time_diff,
-                        periods=pred_len,
-                        freq=time_diff
-                    )
-                else:
-                    future_timestamps = []
-            else:
-                # Latest data: calculate from last time point of entire data file
-                last_timestamp = df['timestamps'].iloc[-1]
-                time_diff = df['timestamps'].iloc[1] - df['timestamps'].iloc[0]
-                future_timestamps = pd.date_range(
-                    start=last_timestamp + time_diff,
-                    periods=pred_len,
-                    freq=time_diff
-                )
-        else:
-            future_timestamps = range(len(df), len(df) + pred_len)
-        
-        prediction_results = []
-        for i, (_, row) in enumerate(pred_df.iterrows()):
-            prediction_results.append({
-                'timestamp': future_timestamps[i].isoformat() if i < len(future_timestamps) else f"T{i}",
-                'open': float(row['open']),
-                'high': float(row['high']),
-                'low': float(row['low']),
-                'close': float(row['close']),
-                'volume': float(row['volume']) if 'volume' in row else 0,
-                'amount': float(row['amount']) if 'amount' in row else 0
-            })
-        
-        # Save prediction results to file
-        try:
-            save_prediction_results(
-                file_path=file_path,
-                prediction_type=prediction_type,
-                prediction_results=prediction_results,
-                actual_data=actual_data,
-                input_data=x_df,
-                prediction_params={
-                    'lookback': lookback,
-                    'pred_len': pred_len,
-                    'temperature': temperature,
-                    'top_p': top_p,
-                    'sample_count': sample_count,
-                    'start_date': start_date if start_date else 'latest'
-                }
-            )
-        except Exception as e:
-            print(f"Failed to save prediction results: {e}")
-        
-        return jsonify({
-            'success': True,
-            'prediction_type': prediction_type,
-            'chart': chart_json,
-            'prediction_results': prediction_results,
-            'actual_data': actual_data,
-            'has_comparison': len(actual_data) > 0,
-            'message': f'Prediction completed, generated {pred_len} prediction points' + (f', including {len(actual_data)} actual data points for comparison' if len(actual_data) > 0 else '')
-        })
-        
+
+        result = app_predict.predict_from_file(file_path, lookback, pred_len, temperature, top_p, sample_count)
+        return jsonify(result)
     except Exception as e:
         return jsonify({'error': f'Prediction failed: {str(e)}'}), 500
 
-@app.route('/api/predict2', methods=['POST'])
-def predict2():
+@app.route('/api/predictkline', methods=['POST'])
+def predictkline():
     """Perform prediction with direct K-line data input"""
     try:
         data = request.get_json()
@@ -672,252 +107,23 @@ def predict2():
         top_p = float(data.get('top_p', 0.9))
         sample_count = int(data.get('sample_count', 1))
         
-        if not kline_data or len(kline_data) == 0:
-            return jsonify({
-                'code': 400,
-                'message': 'K-line data cannot be empty',
-                'data': data
-            }), 400
-        
-        # Convert K-line data to DataFrame
-        try:
-            df = pd.DataFrame(kline_data)
-            
-            # Check required columns
-            required_cols_base = ['open', 'high', 'low', 'close']
-            if not all(col in df.columns for col in required_cols_base):
-                return jsonify({
-                    'code': 400,
-                    'message': f'Missing required columns: {required_cols_base}',
-                    'data': None
-                }), 400
-            
-            # Process timestamp column
-            timestamp_processed = False
-            if 'timestamp' in df.columns:
-                df['timestamps'] = pd.to_datetime(df['timestamp'], unit='s', errors='coerce')
-                # Check if any valid timestamps were created
-                if not df['timestamps'].isna().all():
-                    timestamp_processed = True
-            
-            if not timestamp_processed and 'datetime' in df.columns:
-                df['timestamps'] = pd.to_datetime(df['datetime'], errors='coerce')
-                if not df['timestamps'].isna().all():
-                    timestamp_processed = True
-            
-            if not timestamp_processed and 'time' in df.columns:
-                df['timestamps'] = pd.to_datetime(df['time'], unit='s', errors='coerce')
-                if not df['timestamps'].isna().all():
-                    timestamp_processed = True
-            
-            if not timestamp_processed:
-                # If no valid timestamp column exists or all timestamps are invalid, create one with hourly intervals
-                df['timestamps'] = pd.date_range(start='2024-01-01', periods=len(df), freq='1H')
-            
-            # Ensure numeric columns are numeric type
-            for col in required_cols_base:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-            
-            # Process volume column (optional)
-            if 'volume' in df.columns:
-                df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
-            
-            # Process amount column (optional)
-            if 'amount' in df.columns:
-                df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
-            
-            # Remove rows containing NaN values from OHLC columns only
-            # Don't drop rows just because timestamp conversion failed
-            ohlc_cols = ['open', 'high', 'low', 'close']
-            if 'volume' in df.columns:
-                ohlc_cols.append('volume')
-            if 'amount' in df.columns:
-                ohlc_cols.append('amount')
-            
-            df = df.dropna(subset=ohlc_cols)
-            
-            # If all rows were dropped due to invalid OHLC data, return error
-            if len(df) == 0:
-                return jsonify({
-                    'code': 400,
-                    'message': 'All K-line data contains invalid OHLC values',
-                    'data': None
-                }), 400
-            
-        except Exception as e:
-            return jsonify({
-                'code': 400,
-                'message': f'Failed to process K-line data: {str(e)}',
-                'data': None
-            }), 400
-        
-        if len(df) < lookback:
-            return jsonify({
-                'code': 400,
-                'message': f'Insufficient data length, need at least {lookback} rows, got {len(df)} rows',
-                'data': None
-            }), 400
-        
-        # Perform prediction
-        if MODEL_AVAILABLE and predictor is not None:
-            try:
-                # Use real Kronos model
-                # Only use necessary columns: OHLCV, excluding amount
-                required_cols = ['open', 'high', 'low', 'close']
-                if 'volume' in df.columns:
-                    required_cols.append('volume')
-                
-                # Use the last lookback data points for prediction
-                x_df = df.iloc[-lookback:][required_cols]
-                x_timestamp = df.iloc[-lookback:]['timestamps']
-                
-                # Generate future timestamps for prediction
-                if len(df) > 1:
-                    time_diff = df['timestamps'].iloc[-1] - df['timestamps'].iloc[-2]
-                    last_timestamp = df['timestamps'].iloc[-1]
-                    y_timestamp = pd.date_range(
-                        start=last_timestamp + time_diff,
-                        periods=pred_len,
-                        freq=time_diff
-                    )
-                    y_timestamp = pd.Series(y_timestamp, name='timestamps')
-                else:
-                    # If only one data point, use default hourly intervals
-                    last_timestamp = df['timestamps'].iloc[-1]
-                    y_timestamp = pd.date_range(
-                        start=last_timestamp + pd.Timedelta(hours=1),
-                        periods=pred_len,
-                        freq='1H'
-                    )
-                    y_timestamp = pd.Series(y_timestamp, name='timestamps')
-                
-                # Ensure timestamps are Series format
-                if isinstance(x_timestamp, pd.DatetimeIndex):
-                    x_timestamp = pd.Series(x_timestamp, name='timestamps')
-                if isinstance(y_timestamp, pd.DatetimeIndex):
-                    y_timestamp = pd.Series(y_timestamp, name='timestamps')
-                
-                pred_df = predictor.predict(
-                    df=x_df,
-                    x_timestamp=x_timestamp,
-                    y_timestamp=y_timestamp,
-                    pred_len=pred_len,
-                    T=temperature,
-                    top_p=top_p,
-                    sample_count=sample_count
-                )
-                
-                prediction_type = f"Kronos model prediction (direct K-line input, {lookback} historical points)"
-                
-            except Exception as e:
-                return jsonify({'error': f'Kronos model prediction failed: {str(e)}'}), 500
-        else:
-            return jsonify({'error': 'Kronos model not loaded, please load model first'}), 400
-        
-        # Create chart using the input data
-        chart_json = create_prediction_chart(df, pred_df, lookback, pred_len, None, max(0, len(df) - lookback))
-        
-        # Prepare prediction result data
-        prediction_results = []
-        for i, (_, row) in enumerate(pred_df.iterrows()):
-            prediction_results.append({
-                'timestamp': y_timestamp.iloc[i].isoformat() if i < len(y_timestamp) else f"T{i}",
-                'open': float(row['open']),
-                'high': float(row['high']),
-                'low': float(row['low']),
-                'close': float(row['close']),
-                'volume': float(row['volume']) if 'volume' in row else 0,
-                'amount': float(row['amount']) if 'amount' in row else 0
-            })
-        
-        # Save prediction results to file (using a generic file path for direct data input)
-        # try:
-        #     save_prediction_results(
-        #         file_path="direct_kline_input",
-        #         prediction_type=prediction_type,
-        #         prediction_results=prediction_results,
-        #         actual_data=[],
-        #         input_data=x_df,
-        #         prediction_params={
-        #             'lookback': lookback,
-        #             'pred_len': pred_len,
-        #             'temperature': temperature,
-        #             'top_p': top_p,
-        #             'sample_count': sample_count,
-        #             'input_data_points': len(kline_data),
-        #             'data_source': 'direct_api_input'
-        #         }
-        #     )
-        # except Exception as e:
-        #     print(f"Failed to save prediction results: {e}")
-        
-        return jsonify({
-            'success': True,
-            'prediction_type': prediction_type,
-            'chart': chart_json,
-            'prediction_results': prediction_results,
-            'actual_data': [],
-            'has_comparison': False,
-            'input_data_info': {
-                'total_points': len(df),
-                'used_points': lookback,
-                'timeframe': 'auto-detected',
-                'price_range': {
-                    'min': float(df[['open', 'high', 'low', 'close']].min().min()),
-                    'max': float(df[['open', 'high', 'low', 'close']].max().max())
-                }
-            },
-            'message': f'Prediction completed using {lookback} K-line data points, generated {pred_len} prediction points'
-        })
+        # 修复：使用正确的变量名 kline_data
+        result = app_predict.predict_from_kline(kline_data, lookback, pred_len, temperature, top_p, sample_count)
+        return jsonify(result)
         
     except Exception as e:
         return jsonify({'error': f'Prediction failed: {str(e)}'}), 500
-
+        
 @app.route('/api/load-model', methods=['POST'])
 def load_model():
-    global tokenizer, model, predictor
-    
+    """加载模型 - 调用app-model.py中的函数"""
     try:
         data = request.get_json()
         model_key = data.get('model', 'kronos-base')
         device = data.get('device', 'cpu')
-        
-        if not MODEL_AVAILABLE:
-            return jsonify({
-                'code': 500,
-                'message': 'Model not available',
-                'data': None
-            })
-        
-        if model_key not in AVAILABLE_MODELS:
-            return jsonify({
-                'code': 400,
-                'message': f'Unsupported model: {model_key}',
-                'data': None
-            })
-        
-        model_config = AVAILABLE_MODELS[model_key]
-        
-        # Load tokenizer and model
-        tokenizer = KronosTokenizer.from_pretrained(model_config['tokenizer_id'])
-        model = Kronos.from_pretrained(model_config['model_id'])
-        
-        # Create predictor
-        predictor = KronosPredictor(model, tokenizer, device=device, max_context=model_config['context_length'])
-        
-        return jsonify({
-            'code': 0,
-            'message': f'Model loaded successfully: {model_config["name"]} ({model_config["params"]}) on {device}',
-            'data': {
-                'success': True,
-                'model_info': {
-                    'name': model_config['name'],
-                    'params': model_config['params'],
-                    'context_length': model_config['context_length'],
-                    'description': model_config['description']
-                }
-            }
-        })
+        # 直接调用app-model.py中的load_model函数
+        result = app_model.load_model(model_key, device)
+        return jsonify(result)
         
     except Exception as e:
         return jsonify({
@@ -928,16 +134,11 @@ def load_model():
 
 @app.route('/api/available-models')
 def get_available_models():
-    """Get available model list"""
+    """获取可用模型列表 - 调用app-model.py中的函数"""
     try:
-        return jsonify({
-            'code': 0,
-            'message': 'Success',
-            'data': {
-                'models': AVAILABLE_MODELS,
-                'model_available': MODEL_AVAILABLE
-            }
-        })
+        # 直接调用app-model.py中的get_available_models函数
+        result = app_model.get_available_models()
+        return jsonify(result)
     except Exception as e:
         return jsonify({
             'code': 500,
@@ -947,34 +148,11 @@ def get_available_models():
 
 @app.route('/api/model-status')
 def get_model_status():
-    """Get model loading status"""
+    """获取模型状态 - 调用app-model.py中的函数"""
     try:
-        if MODEL_AVAILABLE:
-            status = {
-                'model_available': True,
-                'model_loaded': model is not None,
-                'tokenizer_loaded': tokenizer is not None,
-                'predictor_ready': predictor is not None
-            }
-            
-            if predictor is not None:
-                status['current_model'] = {
-                    'device': str(predictor.device),
-                    'max_context': predictor.max_context
-                }
-        else:
-            status = {
-                'model_available': False,
-                'model_loaded': False,
-                'tokenizer_loaded': False,
-                'predictor_ready': False
-            }
-        
-        return jsonify({
-            'code': 0,
-            'message': 'Success',
-            'data': status
-        })
+        # 直接调用app-model.py中的get_model_status函数
+        result = app_model.get_model_status()
+        return jsonify(result)
         
     except Exception as e:
         return jsonify({
@@ -983,165 +161,59 @@ def get_model_status():
             'data': None
         })
 
+@app.route('/')
+def index():
+    """Home page"""
+    return render_template('index.html')
+
 @app.route('/crypto.html')
 def crypto_page():
     return render_template('crypto.html')
 
 @app.route('/api/exchange-kline', methods=['POST'])
-def get_exchange_kline():
-    """获取交易所K线数据"""
+def exchange_kline_api():
+    """获取交易所K线数据API接口"""
     try:
+        # 获取请求参数
         data = request.get_json()
-        exchange = data.get('exchange', 'okx').lower()
-        symbol = data.get('symbol', 'BTC-USDT')
-        timeframe = data.get('timeframe', '1H')
+        # 参数提取和验证
+        exchange = data.get('exchange', 'okx').lower().strip()
+        symbol = data.get('symbol', 'BTC-USDT').strip()
+        timeframe = data.get('timeframe', '1H').strip()
         limit = data.get('limit', 100)
         
-        if exchange == 'okx':
-            # OKX API调用
-            url = 'https://www.okx.com/api/v5/market/candles'
-            params = {
-                'instId': symbol,
-                'bar': timeframe,
-                'limit': str(limit)
-            }
-            
-            response = requests.get(url, params=params, timeout=10)
-            
-            if response.status_code == 200:
-                result = response.json()
-                
-                if result.get('code') == '0' and result.get('data'):
-                    # 转换OKX数据格式为TradingView格式
-                    kline_data = []
-                    for item in result['data']:
-                        # OKX返回格式: [timestamp, open, high, low, close, volume, volCcy, volCcyQuote, confirm]
-                        timestamp_ms = int(item[0])  # OKX返回的是毫秒时间戳
-                        timestamp_sec = timestamp_ms // 1000  # 转换为秒级时间戳
-                        
-                        kline_data.append({
-                            'time': timestamp_sec,  # TradingView需要秒级时间戳
-                            'datetime': datetime.datetime.fromtimestamp(timestamp_sec).strftime('%Y-%m-%d %H:%M:%S'),  # 添加timestamp字段
-                            'open': float(item[1]),
-                            'high': float(item[2]),
-                            'low': float(item[3]),
-                            'close': float(item[4]),
-                            'volume': float(item[5]),
-                            'amount': float(item[6]) if len(item) > 6 else float(item[5]) * float(item[4])  # 成交额
-                        })
-                    
-                    # 按时间戳排序（从旧到新）- TradingView要求正序
-                    kline_data.sort(key=lambda x: x['time'])
-                    
-                    return jsonify({
-                        'code': 0,
-                        'message': 'K线数据获取成功',
-                        'data': {
-                            'success': True,
-                            'exchange': exchange.upper(),
-                            'symbol': symbol,
-                            'timeframe': timeframe,
-                            'count': len(kline_data),
-                            'kline_data': kline_data,
-                            'data_info': {
-                                'rows': len(kline_data),
-                                'columns': ['time', 'datetime', 'open', 'high', 'low', 'close', 'volume', 'amount'],
-                                'price_range': {
-                                    'min': min(item['low'] for item in kline_data) if kline_data else 0,
-                                    'max': max(item['high'] for item in kline_data) if kline_data else 0
-                                },
-                                'time_range': {
-                                    'start': datetime.datetime.fromtimestamp(kline_data[0]['time']).isoformat() if kline_data else None,
-                                    'end': datetime.datetime.fromtimestamp(kline_data[-1]['time']).isoformat() if kline_data else None
-                                }
-                            }
-                        }
-                    })
-                else:
-                    return jsonify({
-                        'code': 400,
-                        'message': f'OKX API返回错误: {result.get("msg", "未知错误")}',
-                        'data': None
-                    }), 400
-            else:
+        # 参数类型验证
+        if not isinstance(limit, int):
+            try:
+                limit = int(limit)
+            except (ValueError, TypeError):
                 return jsonify({
-                    'code': 500,
-                    'message': f'请求失败，HTTP状态码: {response.status_code}',
+                    'code': 400,
+                    'message': 'limit参数必须是整数',
                     'data': None
-                }), 500
+                }), 400
         
-        elif exchange == 'binance':
-            # Binance API调用
-            url = 'https://api.binance.com/api/v3/klines'
-            params = {
-                'symbol': symbol.replace('-', ''),
-                'interval': timeframe.lower(),
-                'limit': limit
-            }
-            
-            response = requests.get(url, params=params, timeout=10)
-            
-            if response.status_code == 200:
-                result = response.json()
-                
-                # 转换Binance数据格式为TradingView格式
-                kline_data = []
-                for item in result:
-                    timestamp_ms = int(item[0])  # Binance返回的是毫秒时间戳
-                    timestamp_sec = timestamp_ms // 1000  # 转换为秒级时间戳
-                    
-                    kline_data.append({
-                        'time': timestamp_sec,  # TradingView需要秒级时间戳
-                        'timestamp': timestamp_sec,  # 添加timestamp字段
-                        'open': float(item[1]),
-                        'high': float(item[2]),
-                        'low': float(item[3]),
-                        'close': float(item[4]),
-                        'volume': float(item[5]),
-                        'amount': float(item[7])  # Binance的成交额在索引7
-                    })
-                
-                # 按时间戳排序（从旧到新）
-                kline_data.sort(key=lambda x: x['time'])
-                
-                return jsonify({
-                    'code': 0,
-                    'message': 'K线数据获取成功',
-                    'data': {
-                        'success': True,
-                        'exchange': exchange.upper(),
-                        'symbol': symbol,
-                        'timeframe': timeframe,
-                        'count': len(kline_data),
-                        'kline_data': kline_data,
-                        'data_info': {
-                            'rows': len(kline_data),
-                            'columns': ['time', 'timestamp', 'open', 'high', 'low', 'close', 'volume', 'amount'],
-                            'price_range': {
-                                'min': min(item['low'] for item in kline_data) if kline_data else 0,
-                                'max': max(item['high'] for item in kline_data) if kline_data else 0
-                            },
-                            'time_range': {
-                                'start': datetime.datetime.fromtimestamp(kline_data[0]['time']).isoformat() if kline_data else None,
-                                'end': datetime.datetime.fromtimestamp(kline_data[-1]['time']).isoformat() if kline_data else None
-                            }
-                        }
-                    }
-                })
-            else:
-                return jsonify({
-                    'code': 500,
-                    'message': f'Binance API请求失败，HTTP状态码: {response.status_code}',
-                    'data': None
-                }), 500
-        
-        else:
+        # 参数范围验证
+        if not all([exchange, symbol, timeframe]):
             return jsonify({
                 'code': 400,
-                'message': f'不支持的交易所: {exchange}',
+                'message': '参数不完整，请检查exchange、symbol、timeframe参数',
                 'data': None
             }), 400
-            
+        
+        if limit <= 0 or limit > 1000:
+            return jsonify({
+                'code': 400,
+                'message': 'limit参数必须在1-1000之间',
+                'data': None
+            }), 400
+        
+        # 调用K线数据获取函数
+        result, status_code = app_crypto_kline.get_exchange_kline(exchange, symbol, timeframe, limit)
+        
+        # 返回结果
+        return result, status_code
+        
     except Exception as e:
         return jsonify({
             'code': 500,
@@ -1151,10 +223,9 @@ def get_exchange_kline():
 
 if __name__ == '__main__':
     print("Starting Kronos Web UI...")
-    print(f"Model availability: {MODEL_AVAILABLE}")
-    if MODEL_AVAILABLE:
-        print("Tip: You can load Kronos model through /api/load-model endpoint")
+    if app_model:
+        print("Model module available: You can load Kronos model through /api/load-model endpoint")
     else:
-        print("Tip: Will use simulated data for demonstration")
+        print("Model module not available: Will use simulated data for demonstration")
     
     app.run(debug=True, host='0.0.0.0', port=7070)

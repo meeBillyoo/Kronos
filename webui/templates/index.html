@@ -802,12 +802,16 @@
                     file_path: filePath
                 });
                 
-                // 注意：根据API文档，/api/load-data 可能还使用旧格式，需要兼容处理
-                if (response.data.success || response.data.code === 0) {
+                // 统一处理响应格式
+                if (response.data.success === true) {
                     currentDataFile = filePath;
-                    // 兼容新旧格式
-                    const dataInfo = response.data.data_info || response.data.data?.data_info;
-                    const message = response.data.message || response.data.data?.message;
+                    const dataInfo = response.data.data_info;
+                    const message = response.data.message;
+                    
+                    // 验证必要的数据信息字段
+                    if (!dataInfo || !dataInfo.rows || !dataInfo.columns) {
+                        throw new Error('Invalid data info received from server');
+                    }
                     
                     currentDataInfo = dataInfo;
                     showDataInfo(dataInfo);
@@ -820,13 +824,20 @@
                     
                     console.log('✅ Data loaded successfully:', dataInfo);
                 } else {
-                    const errorMsg = response.data.message || response.data.error;
+                    const errorMsg = response.data.error || response.data.message || 'Unknown error';
                     showStatus('error', errorMsg);
                 }
             } catch (error) {
                 console.error('❌ Data loading failed:', error);
-                const errorMsg = error.response?.data?.message || error.response?.data?.error || error.message;
-                showStatus('error', `Data loading failed: ${errorMsg}`);
+                let errorMsg = 'Data loading failed';
+                
+                if (error.response && error.response.data) {
+                    errorMsg = error.response.data.error || error.response.data.message || errorMsg;
+                } else if (error.message) {
+                    errorMsg += ': ' + error.message;
+                }
+                
+                showStatus('error', errorMsg);
             } finally {
                 showLoading(false);
                 document.getElementById('load-data-btn').disabled = false;
@@ -836,15 +847,29 @@
         // Display data information
         function showDataInfo(dataInfo) {
             document.getElementById('data-info').style.display = 'block';
-            document.getElementById('data-rows').textContent = dataInfo.rows;
-            document.getElementById('data-cols').textContent = dataInfo.columns.length;
-            document.getElementById('data-time-range').textContent = `${dataInfo.start_date} to ${dataInfo.end_date}`;
-            document.getElementById('data-price-range').textContent = `${dataInfo.price_range.min.toFixed(4)} - ${dataInfo.price_range.max.toFixed(4)}`;
-            document.getElementById('data-timeframe').textContent = dataInfo.timeframe;
-            document.getElementById('data-prediction-cols').textContent = dataInfo.prediction_columns.join(', ');
+            document.getElementById('data-rows').textContent = dataInfo.rows || '-';
+            document.getElementById('data-cols').textContent = dataInfo.columns ? dataInfo.columns.length : '-';
             
-            // Initialize time window slider
-            initializeTimeWindowSlider(dataInfo);
+            // 安全处理时间范围
+            const timeRange = (dataInfo.start_date && dataInfo.end_date) 
+                ? `${dataInfo.start_date.split('T')[0]} to ${dataInfo.end_date.split('T')[0]}`
+                : '-';
+            document.getElementById('data-time-range').textContent = timeRange;
+            
+            // 安全处理价格范围
+            const priceRange = dataInfo.price_range 
+                ? `${dataInfo.price_range.min.toFixed(4)} - ${dataInfo.price_range.max.toFixed(4)}`
+                : '-';
+            document.getElementById('data-price-range').textContent = priceRange;
+            
+            document.getElementById('data-timeframe').textContent = dataInfo.timeframe || 'auto-detected';
+            document.getElementById('data-prediction-cols').textContent = 
+                dataInfo.prediction_columns ? dataInfo.prediction_columns.join(', ') : 'open, high, low, close';
+            
+            // Initialize time window slider only if we have valid data
+            if (dataInfo.start_date && dataInfo.end_date && dataInfo.rows) {
+                initializeTimeWindowSlider(dataInfo);
+            }
         }
 
                     // Time window slider related variables
