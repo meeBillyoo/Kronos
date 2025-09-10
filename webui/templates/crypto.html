@@ -663,55 +663,37 @@
 
                 <!-- 交易所数据配置 -->
                 <div class="form-group">
-                    <label for="exchange-select"><i class="fas fa-exchange-alt"></i> 选择交易所</label>
+                    <label for="exchange-select"><i class="fas fa-exchange-alt"></i> 交易所</label>
                     <select id="exchange-select">
-                        <option value="okx" selected>OKX (欧易)</option>
-                        <option value="binance">Binance (币安)</option>
+                        <option value="okx">OKX</option>
+                        <option value="binance" selected>Binance</option>
                     </select>
-                    <small class="form-text">选择数据来源交易所</small>
                 </div>
 
                 <div class="form-group">
-                    <label for="token-symbol"><i class="fas fa-coins"></i> 交易对设置</label>
+                    <label for="token-symbol"><i class="fas fa-coins"></i> 交易对</label>
                     <div class="input-group">
                         <input type="text" id="token-symbol" placeholder="代币符号" value="BTC">
                         <select id="timeframe-select">
-                            <option value="1m">1分钟</option>
-                            <option value="5m" selected>5分钟</option>
-                            <option value="15m">15分钟</option>
-                            <option value="30m">30分钟</option>
+                            <option value="15m" selected>15分钟</option>
                             <option value="1H">1小时</option>
                             <option value="4H">4小时</option>
                             <option value="1D">1天</option>
+                            <option value="1W">1周</option>
+                            <option value="1M">1月</option>
                         </select>
-                    </div>
-                    <small class="form-text">将自动获取 [代币]-USDT 交易对数据</small>
-                    
-                    <!-- 热门代币快选 -->
-                    <div class="popular-tokens">
-                        <button class="token-tag" onclick="setTokenSymbol('BTC')">BTC</button>
-                        <button class="token-tag" onclick="setTokenSymbol('ETH')">ETH</button>
-                        <button class="token-tag" onclick="setTokenSymbol('SOL')">SOL</button>
-                        <button class="token-tag" onclick="setTokenSymbol('ADA')">ADA</button>
-                        <button class="token-tag" onclick="setTokenSymbol('AVAX')">AVAX</button>
-                        <button class="token-tag" onclick="setTokenSymbol('MATIC')">MATIC</button>
                     </div>
                 </div>
 
                 <div class="form-group">
-                    <label for="data-limit"><i class="fas fa-chart-line"></i> 历史数据量</label>
+                    <label for="data-limit"><i class="fas fa-chart-line"></i> 数据量</label>
                     <select id="data-limit">
-                        <option value="200">200 个数据点</option>
-                        <option value="400" selected>400 个数据点</option>
-                        <option value="500">500 个数据点</option>
-                        <option value="1000">1000 个数据点</option>
+                        <option value="200">200</option>
+                        <option value="400" selected>400</option>
+                        <option value="500">500</option>
+                        <option value="1000">1000</option>
                     </select>
-                    <small class="form-text">更多数据点可提高预测准确性</small>
                 </div>
-
-                <button id="fetch-data-btn" class="btn btn-primary">
-                    <i class="fas fa-download"></i> 获取K线数据
-                </button>
 
                 <!-- AI预测参数 -->
                 <div class="prediction-params">
@@ -728,17 +710,17 @@
                     </div>
                     <div class="param-row">
                         <div class="param-group">
-                            <label for="temperature">创造性 (温度): <span id="temp-value">1.0</span></label>
+                            <label for="temperature">创造性: <span id="temp-value">1.0</span></label>
                             <input type="range" id="temperature" value="1.0" min="0.1" max="2.0" step="0.1" class="slider">
                         </div>
                         <div class="param-group">
-                            <label for="top-p">精确度 (Top-p): <span id="top-p-value">0.9</span></label>
+                            <label for="top-p">精确度: <span id="top-p-value">0.9</span></label>
                             <input type="range" id="top-p" value="0.9" min="0.1" max="1.0" step="0.1" class="slider">
                         </div>
                     </div>
                 </div>
 
-                <button id="predict-btn" class="btn btn-secondary" disabled>
+                <button id="predict-btn" class="btn btn-secondary">
                     <i class="fas fa-magic"></i> 开始AI预测
                 </button>
 
@@ -747,25 +729,25 @@
 
                 <!-- 数据信息显示 -->
                 <div id="data-info" class="data-info">
-                    <h3><i class="fas fa-info-circle"></i> 数据统计信息</h3>
+                    <h3><i class="fas fa-info-circle"></i> 数据信息</h3>
                     <div class="data-row">
-                        <span class="data-label"><i class="fas fa-chart-bar"></i> 交易对</span>
+                        <span class="data-label">交易对</span>
                         <span class="data-value" id="data-symbol">-</span>
                     </div>
                     <div class="data-row">
-                        <span class="data-label"><i class="fas fa-clock"></i> 时间周期</span>
+                        <span class="data-label">周期</span>
                         <span class="data-value" id="data-timeframe">-</span>
                     </div>
                     <div class="data-row">
-                        <span class="data-label"><i class="fas fa-database"></i> 数据点数</span>
+                        <span class="data-label">数据点</span>
                         <span class="data-value" id="data-count">-</span>
                     </div>
                     <div class="data-row">
-                        <span class="data-label"><i class="fas fa-dollar-sign"></i> 价格区间</span>
+                        <span class="data-label">价格区间</span>
                         <span class="data-value" id="data-price-range">-</span>
                     </div>
                     <div class="data-row">
-                        <span class="data-label"><i class="fas fa-calendar"></i> 时间范围</span>
+                        <span class="data-label">时间范围</span>
                         <span class="data-value" id="data-time-range">-</span>
                     </div>
                 </div>
@@ -985,9 +967,6 @@
             showStatus('正在获取交易所数据...', 'loading');
             showLoading(true, '正在从交易所获取K线数据...');
             
-            const fetchBtn = document.getElementById('fetch-data-btn');
-            fetchBtn.disabled = true;
-            
             try {
                 const symbol = `${tokenSymbol}-USDT`;
                 console.log('准备调用API，symbol:', symbol);
@@ -1034,69 +1013,96 @@
                 } else {
                     showStatus(`❌ 获取数据失败: ${response.data.message}`, 'error');
                 }
+                
             } catch (error) {
-                console.error('获取交易所数据错误:', error);
-                showStatus(`❌ 网络错误: ${error.message}`, 'error');
+                console.error('获取数据错误:', error);
+                if (error.response && error.response.data) {
+                    const errorMsg = error.response.data.message || error.response.data.error || error.message;
+                    showStatus(`❌ 获取数据失败: ${errorMsg}`, 'error');
+                } else {
+                    showStatus(`❌ 网络错误: ${error.message}`, 'error');
+                }
             } finally {
                 showLoading(false);
-                fetchBtn.disabled = false;
             }
         }
 
-        // 执行AI预测
+        // 修改后的预测函数 - 先获取数据再预测
         async function performPrediction() {
-            if (!currentKlineData || currentKlineData.length === 0) {
-                showStatus('请先获取K线数据', 'error');
-                return;
-            }
-
-            const lookback = parseInt(document.getElementById('lookback').value);
-            const predLen = parseInt(document.getElementById('pred-len').value);
-            const temperature = parseFloat(document.getElementById('temperature').value);
-            const topP = parseFloat(document.getElementById('top-p').value);
-
-            if (currentKlineData.length < lookback) {
-                showStatus(`数据不足：需要至少 ${lookback} 个数据点，当前只有 ${currentKlineData.length} 个`, 'error');
-                return;
-            }
-
-            showStatus('AI大脑正在分析数据并生成预测...', 'loading');
-            showLoading(true, 'AI正在分析K线模式并生成预测...');
-
             const predictBtn = document.getElementById('predict-btn');
+            
+            if (!predictBtn) {
+                console.error('找不到预测按钮');
+                return;
+            }
+            
             predictBtn.disabled = true;
-
+            showLoading(true, '正在获取K线数据...');
+            
             try {
-                const response = await axios.post('/api/predictkline', {
+                // 先获取K线数据
+                await fetchExchangeData();
+                
+                if (!currentKlineData || currentKlineData.length === 0) {
+                    showStatus('❌ 无法获取K线数据，请检查网络连接', 'error');
+                    return;
+                }
+                
+                showLoading(true, '正在进行AI预测...');
+                
+                // 获取预测参数
+                const lookback = parseInt(document.getElementById('lookback').value);
+                const predLen = parseInt(document.getElementById('pred-len').value);
+                const temperature = parseFloat(document.getElementById('temperature').value);
+                const topP = parseFloat(document.getElementById('top-p').value);
+                
+                // 验证参数
+                if (lookback > currentKlineData.length) {
+                    showStatus(`❌ 回看长度(${lookback})不能超过数据点数(${currentKlineData.length})`, 'error');
+                    return;
+                }
+                
+                // 调用预测API
+                const response = await axios.post('/api/predictkline', {    
                     kline_data: currentKlineData,
                     lookback: lookback,
                     pred_len: predLen,
                     temperature: temperature,
                     top_p: topP
                 });
-
-                if (response.data.success) {
-                    const predictionResults = response.data.prediction_results;
+                
+                if (response.data && response.data.success && response.data.prediction_results) {
+                    const predictions = response.data.prediction_results;
                     
-                    // 根据API文档，预测结果已包含timestamp和datetime字段
-                    // 直接使用API返回的时间戳，无需重新计算
-                    const chartData = predictionResults.map(item => ({
-                        time: item.timestamp, // 使用API返回的秒级时间戳
+                    // 转换预测数据格式以适配LightweightCharts
+                    const chartPredictions = predictions.map(item => ({
+                        time: item.timestamp, // 使用timestamp作为time
                         open: parseFloat(item.open),
                         high: parseFloat(item.high),
                         low: parseFloat(item.low),
                         close: parseFloat(item.close)
                     }));
                     
-                    // 更新预测K线图表
+                    // 添加预测数据到图表
                     if (predictionSeries) {
-                        predictionSeries.setData(chartData);
-                        chart.timeScale().fitContent();
+                        chart.removeSeries(predictionSeries);
                     }
                     
-                    showStatus(`🎯 AI预测完成！生成了 ${predLen} 个预测数据点，预测结果已显示在图表中`, 'success');
+                    predictionSeries = chart.addCandlestickSeries({
+                        upColor: '#ff6b6b',
+                        downColor: '#ff6b6b',
+                        borderVisible: true,
+                        wickUpColor: '#ff6b6b',
+                        wickDownColor: '#ff6b6b',
+                        title: 'AI预测数据'
+                    });
+                    
+                    predictionSeries.setData(chartPredictions);
+                    
+                    showStatus(`✅ AI预测完成！生成了 ${predictions.length} 个预测数据点`, 'success');
                 } else {
-                    showStatus(`❌ 预测失败: ${response.data.message || response.data.error}`, 'error');
+                    const errorMsg = response.data && response.data.error ? response.data.error : '预测响应格式错误';
+                    showStatus(`❌ ${errorMsg}`, 'error');
                 }
             } catch (error) {
                 console.error('预测错误:', error);
@@ -1117,20 +1123,8 @@
             console.log('🚀 Kronos AI 加密货币预测平台已启动');
             initChart();
             
-            // 绑定按钮事件
-            const fetchBtn = document.getElementById('fetch-data-btn');
+            // 只绑定预测按钮事件
             const predictBtn = document.getElementById('predict-btn');
-            
-            if (fetchBtn) {
-                fetchBtn.addEventListener('click', function(e) {
-                    console.log('获取K线数据按钮被点击');
-                    e.preventDefault();
-                    fetchExchangeData();
-                });
-                console.log('获取K线数据按钮事件已绑定');
-            } else {
-                console.error('找不到获取K线数据按钮');
-            }
             
             if (predictBtn) {
                 predictBtn.addEventListener('click', function(e) {
@@ -1161,7 +1155,7 @@
                 });
             }
             
-            // 参数输入验证 - 只对number类型的input进行验证
+            // 参数输入验证
             const paramInputs = ['lookback', 'pred-len'];
             paramInputs.forEach(id => {
                 const input = document.getElementById(id);
@@ -1179,7 +1173,7 @@
 
             // 显示初始化完成状态
             setTimeout(() => {
-                showStatus('✨ 系统初始化完成，请选择交易对并获取数据开始预测', 'success');
+                showStatus('✨ 系统初始化完成，点击"开始AI预测"按钮进行智能预测', 'success');
             }, 1000);
         });
     </script>
