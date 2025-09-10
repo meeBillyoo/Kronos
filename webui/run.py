@@ -37,6 +37,9 @@ def install_dependencies():
 
 def main():
     """Main function"""
+    # 从环境变量获取端口，默认为 8068
+    port = int(os.environ.get('PORT', 8068))
+    
     print("🚀 Starting Kronos Web UI...")
     print("=" * 50)
     
@@ -71,8 +74,8 @@ def main():
     try:
         from app import app
         print("✅ Web server started successfully!")
-        print(f"🌐 Main page: http://localhost:7070")
-        print(f"🌐 加密货币页面: http://localhost:7070/crypto.html")
+        print(f"🌐 Main page: http://localhost:{port}")
+        print(f"🌐 加密货币页面: http://localhost:{port}/crypto.html")
         print("💡 Tip: Press Ctrl+C to stop server")
         
         # Auto-open browser with option to choose page
@@ -85,18 +88,18 @@ def main():
         
         time.sleep(2)
         if choice == '2':
-            webbrowser.open('http://localhost:7070/crypto.html')
+            webbrowser.open(f'http://localhost:{port}/crypto.html')
         elif choice == '3':
             pass  # Don't open browser
         else:
-            webbrowser.open('http://localhost:7070')
+            webbrowser.open(f'http://localhost:{port}')
         
-        # Start Flask application
-        app.run(debug=True, host='0.0.0.0', port=7070)
+        # Start Flask application with environment variable port
+        app.run(debug=True, host='0.0.0.0', port=port)
         
     except Exception as e:
         print(f"❌ Startup failed: {e}")
-        print("Please check if port 7070 is occupied")
+        print(f"Please check if port {port} is occupied")
 
 if __name__ == "__main__":
     main()
