@@ -10,6 +10,7 @@ import sys
 import warnings
 import datetime
 import requests
+import threading
 warnings.filterwarnings('ignore')
 from typing import Optional, Dict, Any, Tuple, List
 
@@ -21,6 +22,9 @@ if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 # 导入模型管理模块
 import app_model
+
+# 创建全局预测锁，确保同一时间只能有一个预测任务运行
+prediction_lock = threading.Lock()
 
 app = Flask(__name__)
 CORS(app)
@@ -351,16 +355,26 @@ def predict_from_file(file_path: str, lookback: int = 400, pred_len: int = 120,
                 if isinstance(y_timestamp, pd.DatetimeIndex):
                     y_timestamp = pd.Series(y_timestamp, name='timestamps')
                 
-                # 调用模型预测
-                pred_df = app_model.predictor.predict(
-                    df=x_df,
-                    x_timestamp=x_timestamp,
-                    y_timestamp=y_timestamp,
-                    pred_len=pred_len,
-                    T=temperature,
-                    top_p=top_p,
-                    sample_count=sample_count
-                )
+                # 使用锁保护模型预测调用
+                if not prediction_lock.acquire(blocking=False):
+                    return {
+                        'success': False,
+                        'error': '预测服务正忙，请稍后再试。同一时间只能运行一个预测任务。'
+                    }
+                
+                try:
+                    # 调用模型预测
+                    pred_df = app_model.predictor.predict(
+                        df=x_df,
+                        x_timestamp=x_timestamp,
+                        y_timestamp=y_timestamp,
+                        pred_len=pred_len,
+                        T=temperature,
+                        top_p=top_p,
+                        sample_count=sample_count
+                    )
+                finally:
+                    prediction_lock.release()
                 
             except Exception as e:
                 return {
@@ -621,16 +635,26 @@ def predict_from_kline(kline_data: List[Dict], lookback: int = 400, pred_len: in
                 if isinstance(y_timestamp, pd.DatetimeIndex):
                     y_timestamp = pd.Series(y_timestamp, name='timestamps')
                 
-                # 调用模型预测
-                pred_df = app_model.predictor.predict(
-                    df=x_df,
-                    x_timestamp=x_timestamp,
-                    y_timestamp=y_timestamp,
-                    pred_len=pred_len,
-                    T=temperature,
-                    top_p=top_p,
-                    sample_count=sample_count
-                )
+                # 使用锁保护模型预测调用
+                if not prediction_lock.acquire(blocking=False):
+                    return {
+                        'success': False,
+                        'error': '预测服务正忙，请稍后再试。同一时间只能运行一个预测任务。'
+                    }
+                
+                try:
+                    # 调用模型预测
+                    pred_df = app_model.predictor.predict(
+                        df=x_df,
+                        x_timestamp=x_timestamp,
+                        y_timestamp=y_timestamp,
+                        pred_len=pred_len,
+                        T=temperature,
+                        top_p=top_p,
+                        sample_count=sample_count
+                    )
+                finally:
+                    prediction_lock.release()
                 
                 prediction_type = f"Kronos模型预测（直接K线输入，{lookback}个历史点）"
                 
