@@ -1,0 +1,14 @@
+kronos
+
+Kronos 代码库
+git clone https://github.com/meeBillyoo/kronos.git
+cd kronos
+pip install -r requirements.txt
+cd webui
+pip install -r requirements.txt
+python webui.py --listen --enable-insecure-extension-access
+
+
+Kronos-base 模型库
+pip install huggingface_hub
+huggingface-cli download NeoQuasar/Kronos-base --local-dir ./kronos-base --local-dir-use-symlinks False --resume-download

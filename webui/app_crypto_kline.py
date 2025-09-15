@@ -11,6 +11,7 @@ import datetime
 import requests
 from typing import Dict, List, Any, Optional, Tuple, Union
 
+const HTTP_PROXY = 'http://35.228.200.68:8872/?proxy='
 
 def get_exchange_okx_kline(exchange: str, symbol: str, timeframe: str, limit: int) -> Tuple[Union[Dict[str, Any], Any], int]:
     """
@@ -27,7 +28,7 @@ def get_exchange_okx_kline(exchange: str, symbol: str, timeframe: str, limit: in
     """
     try:
         # OKX API调用配置
-        url = 'https://www.okx.com/api/v5/market/candles'
+        url = HTTP_PROXY + 'https://www.okx.com/api/v5/market/candles'
         params = {
             'instId': symbol,  # 产品ID，如BTC-USDT
             'bar': timeframe,  # K线周期
@@ -192,7 +193,9 @@ def get_exchange_binance_kline(exchange: str, symbol: str, timeframe: str, limit
     """
     try:
         # Binance API调用配置
-        url = 'https://api.binance.com/api/v3/klines'
+        # http://35.228.200.68:8872/?proxy=https://tonapi.io/v2/events/863fa42688d7e7c56dbf04d8f903f934169818df125b958d5b4f9112e596764f
+
+        url = HTTP_PROXY+'https://api.binance.com/api/v3/klines'
         params = {
             'symbol': symbol.replace('-', ''),  # Binance使用BTCUSDT格式，去掉中间的横线
             'interval': timeframe.lower(),      # 时间间隔，如1h, 4h, 1d

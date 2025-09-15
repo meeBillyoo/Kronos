@@ -772,6 +772,10 @@
                         <div class="legend-color legend-prediction"></div>
                         <span>AI预测数据</span>
                     </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: linear-gradient(45deg, #26a69a, #ef5350);"></div>
+                        <span>交易量</span>
+                    </div>
                 </div>
 
                 <div id="tradingview-chart"></div>
@@ -789,6 +793,7 @@
         let chart = null;
         let candlestickSeries = null;
         let predictionSeries = null;
+        let volumeSeries = null;  // 添加交易量序列变量
         let currentKlineData = null;
 
         // 初始化TradingView图表
@@ -863,6 +868,28 @@
                 title: 'AI预测',
             });
             
+            // 添加交易量序列
+            volumeSeries = chart.addHistogramSeries({
+                color: '#26a69a',
+                priceFormat: {
+                    type: 'volume',
+                },
+                priceScaleId: 'volume',
+                scaleMargins: {
+                    top: 0.7,
+                    bottom: 0,
+                },
+                title: '交易量',
+            });
+            
+            // 为交易量创建单独的价格刻度
+            chart.priceScale('volume').applyOptions({
+                scaleMargins: {
+                    top: 0.7,
+                    bottom: 0,
+                },
+            });
+            
             // 响应式调整
             const resizeObserver = new ResizeObserver(entries => {
                 if (chart) {
@@ -928,7 +955,20 @@
                 close: parseFloat(item.close)
             }));
             
+            // 处理交易量数据
+            const volumeData = data.map(item => ({
+                time: item.time,
+                value: parseFloat(item.volume || 0),
+                color: parseFloat(item.close) >= parseFloat(item.open) ? '#26a69a' : '#ef5350'
+            }));
+            
             candlestickSeries.setData(chartData);
+            
+            // 设置交易量数据
+            if (volumeSeries) {
+                volumeSeries.setData(volumeData);
+            }
+            
             chart.timeScale().fitContent();
         }
 
