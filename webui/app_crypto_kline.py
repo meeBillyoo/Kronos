@@ -28,15 +28,18 @@ def get_exchange_okx_kline(exchange: str, symbol: str, timeframe: str, limit: in
     """
     try:
         # OKX API调用配置
-        url = HTTP_PROXY + 'https://www.okx.com/api/v5/market/candles'
-        params = {
-            'instId': symbol,  # 产品ID，如BTC-USDT
-            'bar': timeframe,  # K线周期
-            'limit': str(limit)  # 获取数量
-        }
+        # 构建目标URL
+        target_url = f'https://www.okx.com/api/v5/market/candles?instId={symbol}&bar={timeframe}&limit={str(limit)}'
+        
+        # 对目标URL进行编码
+        import urllib.parse
+        encoded_url = urllib.parse.quote(target_url, safe='')
+        
+        # 构建代理URL
+        proxy_url = f'http://35.228.200.68:8872/?proxy={encoded_url}'
         
         # 发送HTTP请求获取K线数据
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(proxy_url, timeout=10)
         
         if response.status_code == 200:
             result = response.json()
@@ -192,40 +195,46 @@ def get_exchange_binance_kline(exchange: str, symbol: str, timeframe: str, limit
         Tuple[Union[Dict[str, Any], Any], int]: 返回响应数据和HTTP状态码
     """
     try:
-        # Binance API调用配置
-        # http://35.228.200.68:8872/?proxy=https://tonapi.io/v2/events/863fa42688d7e7c56dbf04d8f903f934169818df125b958d5b4f9112e596764f
-
-        url = HTTP_PROXY+'https://api.binance.com/api/v3/klines'
-        params = {
-            'symbol': symbol.replace('-', ''),  # Binance使用BTCUSDT格式，去掉中间的横线
-            'interval': timeframe.lower(),      # 时间间隔，如1h, 4h, 1d
-            'limit': limit                      # 获取数量
-        }
+        # Binance API调用配置 - 使用正确的Binance API端点
+        # Binance要求symbol格式为BTCUSDT（无横线），interval为小写
+        binance_symbol = symbol.replace('-', '')  # 去掉横线
+        binance_interval = timeframe.lower()      # 转换为小写
+        
+        target_url = f'https://api.binance.com/api/v3/klines?symbol={binance_symbol}&interval={binance_interval}&limit={limit}'
+        
+        # 对目标URL进行编码
+        import urllib.parse
+        encoded_url = urllib.parse.quote(target_url, safe='')
+        
+        # 构建代理URL
+        proxy_url = f'http://35.228.200.68:8872/?proxy={encoded_url}'
         
         # 发送HTTP请求获取K线数据
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(proxy_url, timeout=10)
         
         if response.status_code == 200:
             result = response.json()
             
-            # 转换Binance数据格式为标准化格式
-            kline_data = []
-            for item in result:
-                # Binance返回格式: [openTime, open, high, low, close, volume, closeTime, quoteAssetVolume, ...]
-                timestamp_ms = int(item[0])  # Binance返回的是毫秒时间戳
-                timestamp_sec = timestamp_ms // 1000  # 转换为秒级时间戳
-                
-                # 构建标准化的K线数据格式
-                kline_data.append({
-                    'time': timestamp_sec,     # 秒级时间戳
-                    'datetime': datetime.datetime.fromtimestamp(timestamp_sec).strftime('%Y-%m-%d %H:%M:%S'),  # 可读时间格式
-                    'open': float(item[1]),    # 开盘价
-                    'high': float(item[2]),    # 最高价
-                    'low': float(item[3]),     # 最低价
-                    'close': float(item[4]),   # 收盘价
-                    'volume': float(item[5]),  # 成交量
-                    'amount': float(item[7])   # Binance的成交额在索引7
-                })
+            # Binance直接返回数组，无需检查code字段
+            if isinstance(result, list) and len(result) > 0:
+                # 转换Binance数据格式为标准化格式
+                kline_data = []
+                for item in result:
+                    # Binance返回格式: [openTime, open, high, low, close, volume, closeTime, quoteAssetVolume, ...]
+                    timestamp_ms = int(item[0])  # Binance返回的是毫秒时间戳
+                    timestamp_sec = timestamp_ms // 1000  # 转换为秒级时间戳
+                    
+                    # 构建标准化的K线数据格式
+                    kline_data.append({
+                        'time': timestamp_sec,     # 秒级时间戳
+                        'datetime': datetime.datetime.fromtimestamp(timestamp_sec).strftime('%Y-%m-%d %H:%M:%S'),  # 可读时间格式
+                        'open': float(item[1]),    # 开盘价
+                        'high': float(item[2]),    # 最高价
+                        'low': float(item[3]),     # 最低价
+                        'close': float(item[4]),   # 收盘价
+                        'volume': float(item[5]),  # 成交量
+                        'amount': float(item[7])   # Binance的成交额在索引7
+                    })
             
             # 按时间戳排序（从旧到新）
             kline_data.sort(key=lambda x: x['time'])
