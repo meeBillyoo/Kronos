@@ -11,7 +11,7 @@ import datetime
 import requests
 from typing import Dict, List, Any, Optional, Tuple, Union
 
-const HTTP_PROXY = 'http://35.228.200.68:8872/?proxy='
+HTTP_PROXY = 'http://35.228.200.68:8872/?proxy='
 
 def get_exchange_okx_kline(exchange: str, symbol: str, timeframe: str, limit: int) -> Tuple[Union[Dict[str, Any], Any], int]:
     """
