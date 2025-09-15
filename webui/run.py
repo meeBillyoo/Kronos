@@ -89,10 +89,10 @@ def main():
         time.sleep(2)
         if choice == '2':
             webbrowser.open(f'http://localhost:{port}/crypto.html')
-        elif choice == '3':
-            pass  # Don't open browser
-        else:
+        elif choice == '1':
             webbrowser.open(f'http://localhost:{port}')
+        else:
+            pass  # Don't open browser
         
         # Start Flask application with environment variable port
         app.run(debug=True, host='0.0.0.0', port=port)
